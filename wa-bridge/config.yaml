@@ -1,0 +1,17 @@
+name: "WhatsApp Bridge"
+version: "1.0.0"
+slug: "ha_wa_bridge"
+description: "WhatsApp Web Bridge for Home Assistant"
+url: "https://github.com/raulpetruta/ha-wa-bridge"
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: application
+boot: auto
+map:
+  - config: rw
+options: {}
+schema: {}
+ports:
+  3000/tcp: 3000

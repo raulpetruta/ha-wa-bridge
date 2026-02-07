@@ -1,0 +1,15 @@
+services:
+  wa-bridge:
+    # Build locally for testing, or pull from GHCR
+    build: ./wa-bridge
+    image: ghcr.io/raulpetruta/ha-whatsapp-bridge:latest
+    container_name: ha-whatsapp-bridge
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./wa-bridge/.wwebjs_auth:/usr/src/app/.wwebjs_auth
+      - ./wa-bridge/.wwebjs_cache:/usr/src/app/.wwebjs_cache
+    environment:
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

@@ -1,0 +1,18 @@
+# Service definitions for the WhatsApp Integration
+
+send_message:
+  name: Send message
+  description: Send a WhatsApp message to a specific number.
+  fields:
+    number:
+      name: Number
+      description: The phone number to send the message to (with country code, e.g., 551199999999).
+      required: true
+      selector:
+        text:
+    message:
+      name: Message
+      description: The content of the message.
+      required: true
+      selector:
+        text:

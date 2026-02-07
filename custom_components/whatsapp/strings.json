@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to WhatsApp Bridge",
+        "description": "Enter the WebSocket URL of the WhatsApp Bridge.",
+        "data": {
+          "host": "Bridge WebSocket URL"
+        }
+      },
+      "scan": {
+        "title": "Scan QR Code",
+        "description": "Setup is almost complete!\n\nClick **Submit** to finish adding the integration.\n\nAfter you submit, check your **Notifications** (bell icon) for the QR code to link your WhatsApp account."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the bridge. Make sure the Node.js service is running.",
+      "not_ready": "WhatsApp is not ready yet. Please ensure you have scanned the QR code.",
+      "initializing": "WhatsApp client is initializing. Please try again in a few seconds.",
+      "no_qr_received": "No QR code received. If you are already logged in, check the logs.",
+      "unknown": "Unexpected error occurred. Please check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  }
+}

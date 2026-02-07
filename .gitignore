@@ -1,0 +1,18 @@
+# Node.js
+node_modules/
+wa-bridge/node_modules/
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/

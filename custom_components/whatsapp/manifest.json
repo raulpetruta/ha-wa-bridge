@@ -1,0 +1,11 @@
+{
+  "domain": "whatsapp",
+  "name": "WhatsApp Integration",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/raulpetruta/ha-wa-bridge",
+  "iot_class": "local_push",
+  "requirements": ["qrcode>=7.0"],
+  "version": "1.0.0"
+}
