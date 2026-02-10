@@ -14,6 +14,7 @@ TRIGGER_SCHEMA = vol.Schema(
         vol.Required(CONF_DOMAIN): DOMAIN,
         vol.Required(CONF_TYPE): "message_received",
         vol.Optional("from_number"): str,
+        vol.Optional("from_group"): str,
         vol.Optional("contains_text"): str,
     }
 )
@@ -60,6 +61,13 @@ async def async_attach_trigger(
         if "from_number" in config:
             if data.get("from") != config["from_number"] and data.get("from") != f"{config['from_number']}@c.us":
                  return
+
+        # Check from_group
+        if "from_group" in config:
+            if not data.get("isGroup", False):
+                return
+            if data.get("chatName", "").lower() != config["from_group"].lower():
+                return
 
         # Check contains_text
         if "contains_text" in config:
