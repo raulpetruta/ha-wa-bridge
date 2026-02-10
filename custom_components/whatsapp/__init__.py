@@ -75,8 +75,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register Service
     async def handle_send_message(call: ServiceCall):
         number = call.data.get("number")
+        group = call.data.get("group")
         message = call.data.get("message")
-        await bridge.send_message(number, message)
+        await bridge.send_message(number, message, group)
 
     hass.services.async_register(DOMAIN, "send_message", handle_send_message)
 

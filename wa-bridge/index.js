@@ -61,17 +61,39 @@ wss.on('connection', (ws) => {
             console.log('Received command:', data);
 
             if (data.type === 'send_message') {
-                const { number, message: text } = data;
-                // Basic format check for number (e.g. 1234567890@c.us)
-                // If user sends just number, append suffix if needed, but usually HA sends full ID or we handle it
-                // whatsapp-web.js expects '1234567890@c.us' for person or '@g.us' for group
+                const { number, message: text, group_name } = data;
                 let chatId = number;
-                if (!chatId.includes('@')) {
+
+                if (group_name) {
+                    console.log(`Attempting to send message to group: ${group_name}`);
+                    try {
+                        const chats = await client.getChats();
+                        const group = chats.find(chat => chat.isGroup && chat.name.toLowerCase() === group_name.toLowerCase());
+                        
+                        if (group) {
+                            chatId = group.id._serialized;
+                            console.log(`Found group '${group.name}' with ID: ${chatId}`);
+                        } else {
+                            console.error(`Group '${group_name}' not found.`);
+                            return; // Stop processing if group specified but not found
+                        }
+                    } catch (err) {
+                        console.error('Error fetching chats:', err);
+                        return;
+                    }
+                } else if (chatId && !chatId.includes('@')) {
+                     // Basic format check for number (e.g. 1234567890@c.us)
+                    // If user sends just number, append suffix if needed, but usually HA sends full ID or we handle it
+                    // whatsapp-web.js expects '1234567890@c.us' for person or '@g.us' for group
                     chatId = `${chatId}@c.us`;
                 }
-                
-                await client.sendMessage(chatId, text);
-                console.log(`Sent message to ${chatId}: ${text}`);
+
+                if (chatId) {
+                    await client.sendMessage(chatId, text);
+                    console.log(`Sent message to ${chatId}: ${text}`);
+                } else {
+                     console.error('No valid destination (number or group_name) provided.');
+                }
             }
         } catch (error) {
             console.error('Error processing message:', error);
@@ -120,6 +142,17 @@ client.on('auth_failure', msg => {
 client.on('message', async msg => {
     console.log('MESSAGE RECEIVED', msg);
     
+    let chatInfo = {};
+    try {
+        const chat = await msg.getChat();
+        chatInfo = {
+            chatName: chat.name,
+            isGroup: chat.isGroup
+        };
+    } catch (err) {
+        console.error('Error fetching chat info:', err);
+    }
+
     // Broadcast incoming message to HA
     broadcast({
         type: 'message',
@@ -132,7 +165,8 @@ client.on('message', async msg => {
             author: msg.author,
             deviceType: msg.deviceType,
             isForwarded: msg.isForwarded,
-            fromMe: msg.fromMe
+            fromMe: msg.fromMe,
+            ...chatInfo
         }
     });
 });

@@ -54,14 +54,24 @@ class WhatsAppBridge:
         if self._session:
             await self._session.close()
 
-    async def send_message(self, number: str, message: str):
+    async def send_message(self, number: str | None, message: str, group_name: str | None = None):
         if not self._ws or self._ws.closed:
             _LOGGER.warning("Bridge not connected, cannot send message")
             return
         
         payload = {
             "type": "send_message",
-            "number": number,
             "message": message
         }
+
+        if number:
+            payload["number"] = number
+        
+        if group_name:
+            payload["group_name"] = group_name
+
+        if not number and not group_name:
+             _LOGGER.error("Neither number nor group_name provided")
+             return
+
         await self._ws.send_json(payload)
