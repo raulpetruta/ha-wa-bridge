@@ -6,8 +6,14 @@ send_message:
   fields:
     number:
       name: Number
-      description: The phone number to send the message to (with country code, e.g., 551199999999).
-      required: true
+      description: The phone number to send the message to (with country code, e.g., 551199999999). Required if group is not specified.
+      required: false
+      selector:
+        text:
+    group:
+      name: Group Name
+      description: The exact name of the group to send the message to. Required if number is not specified.
+      required: false
       selector:
         text:
     message:
@@ -16,3 +22,4 @@ send_message:
       required: true
       selector:
         text:
+

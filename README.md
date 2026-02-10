@@ -4,6 +4,7 @@ A custom integration to send and receive WhatsApp messages in Home Assistant nat
 
 ## Features
 - **Send Messages**: Use the `whatsapp.send_message` service in HA.
+- **Group Messaging**: Send messages to WhatsApp groups by name.
 - **Receive Messages**: Trigger automations when messages arrive.
 - **Easy Auth**: Scan a QR code in Home Assistant to link your account.
 
@@ -19,6 +20,16 @@ data:
   message: "Hello from Home Assistant! 🏠"
 ```
 
+### Sending to a Group
+You can send messages to a group by its exact name:
+
+```yaml
+service: whatsapp.send_message
+data:
+  group: "Family Group" # Exact name of the group
+  message: "Dinner is ready! 🍽️"
+```
+
 ### Automation Trigger
 Trigger actions when a specific message is received:
 
@@ -31,6 +42,20 @@ action:
   - service: light.turn_on
     target:
       entity_id: light.living_room
+```
+
+### Group Message Trigger
+To trigger an automation from a group message, use `from_group` with the exact group name:
+
+```yaml
+trigger:
+  - platform: whatsapp
+    from_group: "Family Group"
+    contains_text: "Dinner" # Optional
+action:
+  - service: notify.persistent_notification
+    data:
+      message: "Dinner time!"
 ```
 
 ## Installation
