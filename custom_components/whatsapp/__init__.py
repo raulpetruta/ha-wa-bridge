@@ -72,13 +72,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_create_background_task(hass, bridge.start(bridge_event_callback), "whatsapp_bridge_connect")
 
-    # Register Service
+    # Register Services
     async def handle_send_message(call: ServiceCall):
+        """Handle send_message service call."""
         number = call.data.get("number")
         message = call.data.get("message")
         await bridge.send_message(number, message)
 
+    async def handle_send_group_message(call: ServiceCall):
+        """Handle send_group_message service call."""
+        group_id = call.data.get("group_id")
+        message = call.data.get("message")
+        await bridge.send_group_message(group_id, message)
+
+    async def handle_get_groups(call: ServiceCall):
+        """Handle get_groups service call."""
+        groups = await bridge.get_groups()
+        
+        # Create a persistent notification with the groups
+        if groups:
+            group_list = "\n".join([f"**{g['name']}**\n`{g['id']}`\n" for g in groups])
+            message = f"## WhatsApp Groups\n\n{group_list}"
+        else:
+            message = "No groups found or bridge not ready."
+        
+        persistent_notification.async_create(
+            hass, 
+            message, 
+            "WhatsApp Groups", 
+            f"whatsapp_groups_{entry.entry_id}"
+        )
+
     hass.services.async_register(DOMAIN, "send_message", handle_send_message)
+    hass.services.async_register(DOMAIN, "send_group_message", handle_send_group_message)
+    hass.services.async_register(DOMAIN, "get_groups", handle_get_groups)
 
     return True
 

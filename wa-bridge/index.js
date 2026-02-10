@@ -62,9 +62,7 @@ wss.on('connection', (ws) => {
 
             if (data.type === 'send_message') {
                 const { number, message: text } = data;
-                // Basic format check for number (e.g. 1234567890@c.us)
-                // If user sends just number, append suffix if needed, but usually HA sends full ID or we handle it
-                // whatsapp-web.js expects '1234567890@c.us' for person or '@g.us' for group
+                // Format the chat ID for individual messages
                 let chatId = number;
                 if (!chatId.includes('@')) {
                     chatId = `${chatId}@c.us`;
@@ -72,6 +70,46 @@ wss.on('connection', (ws) => {
                 
                 await client.sendMessage(chatId, text);
                 console.log(`Sent message to ${chatId}: ${text}`);
+            }
+
+            if (data.type === 'send_group_message') {
+                const { group_id, message: text } = data;
+                // Group IDs should already include @g.us
+                // But we'll ensure proper format
+                let groupChatId = group_id;
+                if (!groupChatId.includes('@')) {
+                    groupChatId = `${groupChatId}@g.us`;
+                }
+                
+                await client.sendMessage(groupChatId, text);
+                console.log(`Sent message to group ${groupChatId}: ${text}`);
+            }
+
+            if (data.type === 'get_groups') {
+                try {
+                    const chats = await client.getChats();
+                    const groups = chats
+                        .filter(chat => chat.isGroup)
+                        .map(group => ({
+                            id: group.id._serialized,
+                            name: group.name
+                        }));
+                    
+                    console.log(`Found ${groups.length} groups`);
+                    
+                    // Send back to Home Assistant
+                    ws.send(JSON.stringify({
+                        type: 'groups_list',
+                        data: groups
+                    }));
+                } catch (error) {
+                    console.error('Error fetching groups:', error);
+                    ws.send(JSON.stringify({
+                        type: 'groups_list',
+                        data: [],
+                        error: error.message
+                    }));
+                }
             }
         } catch (error) {
             console.error('Error processing message:', error);

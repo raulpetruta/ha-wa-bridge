@@ -16,3 +16,26 @@ send_message:
       required: true
       selector:
         text:
+
+send_group_message:
+  name: Send group message
+  description: Send a WhatsApp message to a group.
+  fields:
+    group_id:
+      name: Group ID
+      description: The WhatsApp group ID (e.g., 120363123456789012@g.us). You can find this by checking message events from groups.
+      required: true
+      example: "120363123456789012@g.us"
+      selector:
+        text:
+    message:
+      name: Message
+      description: The content of the message to send to the group.
+      required: true
+      selector:
+        text:
+
+get_groups:
+  name: Get groups
+  description: Retrieve a list of all WhatsApp groups with their IDs. The results will be shown in a notification.
+  fields: {}
