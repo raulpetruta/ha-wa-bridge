@@ -1,5 +1,5 @@
 name: "WhatsApp Bridge"
-version: "1.0.0"
+version: "1.1.0"
 slug: "ha_wa_bridge"
 description: "WhatsApp Web Bridge for Home Assistant"
 url: "https://github.com/raulpetruta/ha-wa-bridge"
