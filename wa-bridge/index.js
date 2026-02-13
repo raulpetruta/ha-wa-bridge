@@ -1,4 +1,4 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const { WebSocketServer } = require('ws');
 const qrcode = require('qrcode');
 
@@ -61,22 +61,14 @@ wss.on('connection', (ws) => {
             console.log('Received command:', data);
 
             if (data.type === 'send_message') {
-                const { number, message: text, group_name } = data;
-                await handleSendMessage(number, text, group_name);
+                const { number, message: text, group_name, media } = data;
+                await handleSendMessage(number, text, group_name, media);
             } else if (data.type === 'broadcast') {
-                const { targets, message: text } = data;
+                const { targets, message: text, media } = data;
                 if (Array.isArray(targets) && targets.length > 0) {
                    console.log(`Broadcasting message to ${targets.length} targets.`);
                    for (const target of targets) {
-                       // Heuristic: if it looks like a number, treat as number, otherwise try group
-                       // But since we don't know for sure, we can try to find a group first, if not, assume number
-                       // Or simple heuristic: if it contains only digits, assume number.
-                       
-                       // Better approach for "targets":
-                       // If the user provides a list, we try to find a group with that name.
-                       // If no group is found, we assume it's a number.
-                       
-                       await handleSendMessage(target, text, target); // Try both (number=target, group=target) checks inside
+                       await handleSendMessage(target, text, target, media);
                    }
                 } else {
                     console.error('No targets provided for broadcast.');
@@ -88,11 +80,11 @@ wss.on('connection', (ws) => {
     });
 });
 
-async function handleSendMessage(number, text, group_name) {
+async function handleSendMessage(number, text, group_name, media) {
     let chatId = number;
 
     if (group_name) {
-        // optimistically try to find a group first if group_name is provided (or if we are guessing)
+        // optimistically try to find a group first if group_name is provided
         try {
             const chats = await client.getChats();
             const group = chats.find(chat => chat.isGroup && chat.name.toLowerCase() === group_name.toLowerCase());
@@ -106,25 +98,22 @@ async function handleSendMessage(number, text, group_name) {
         }
     }
 
-    // If we didn't find a group (or weren't looking for one specially), and we have a potential number
-    // But wait, if we are in broadcast mode, 'number' and 'group_name' are the same string 'target'.
-    // If we found a group above, chatId is set to group ID.
-    // If we didn't find a group, logic below should handle number.
-    
-    // However, if logic above failed to find a group, chatId is still 'group_name' (which is 'target') because of how I called it.
-    // So if I call handleSendMessage(target, text, target), 'number' is 'target'.
-    
     // Check if chatId is a valid JID (contains @)
     if (chatId && !chatId.includes('@')) {
          // Basic format check for number (e.g. 1234567890@c.us)
-        // whatsapp-web.js expects '1234567890@c.us' for person
         chatId = `${chatId}@c.us`;
     }
 
     if (chatId) {
         try {
-            await client.sendMessage(chatId, text);
-            console.log(`Sent message to ${chatId}: ${text}`);
+            if (media) {
+                const messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
+                await client.sendMessage(chatId, messageMedia, { caption: text });
+                console.log(`Sent media message to ${chatId}: ${text || '(no caption)'}`);
+            } else {
+                await client.sendMessage(chatId, text);
+                console.log(`Sent message to ${chatId}: ${text}`);
+            }
         } catch (sendErr) {
             console.error(`Failed to send message to ${chatId}:`, sendErr);
         }
@@ -132,7 +121,6 @@ async function handleSendMessage(number, text, group_name) {
          console.error('No valid destination (number or group_name) provided.');
     }
 }
-
 
 // Broadcast helper
 function broadcast(data) {
@@ -215,7 +203,6 @@ const startClient = async () => {
         console.error('Failed to initialize client:', err);
         
         // Exit to allow Docker/Supervisor to restart the container
-        // This ensures run.sh runs again to clean up stale locks
         console.log('Exiting to trigger restart and lock cleanup...');
         process.exit(1);
     }

@@ -129,5 +129,9 @@ docker-compose up -d
 ## Credits 
 Powered by [whatsapp-web.js](https://wwebjs.dev/).
 
+## Buy me a coffee
+- [Buy Me a Coffee](https://buymeacoffee.com/raulpetruta)
+- [Revolut Me](https://revolut.me/petrutaraul)
+
 ## License
 [MIT](LICENSE)
