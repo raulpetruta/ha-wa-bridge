@@ -42,6 +42,28 @@ data:
     - "Family Group"      # Group name
 ```
 
+### Sending Media
+You can send images or files using either a URL (`media_url`) or a local path (`media_path`).
+
+#### Using a URL
+```yaml
+service: whatsapp.send_message
+data:
+  number: "1234567890"
+  message: "Check this out!"
+  media_url: "https://www.home-assistant.io/images/favicon.ico"
+```
+
+#### Using a Local File
+Ensure the path is accessible by Home Assistant (e.g., in `config/www`).
+```yaml
+service: whatsapp.send_broadcast
+data:
+  targets: ["Family Group"]
+  message: "Security Snapshot"
+  media_path: "/config/www/camera_snapshot.jpg"
+```
+
 ### Automation Trigger
 Trigger actions when a specific message is received:
 
@@ -131,7 +153,6 @@ Powered by [whatsapp-web.js](https://wwebjs.dev/).
 
 ## Buy me a coffee
 - [Buy Me a Coffee](https://buymeacoffee.com/raulpetruta)
-- [Revolut Me](https://revolut.me/petrutaraul)
 
 ## License
 [MIT](LICENSE)
