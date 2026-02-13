@@ -81,6 +81,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "send_message", handle_send_message)
 
+    async def handle_send_broadcast(call: ServiceCall):
+        targets = call.data.get("targets", [])
+        message = call.data.get("message")
+        
+        # Ensure targets is a list
+        if not isinstance(targets, list):
+            _LOGGER.error("Targets must be a list")
+            return
+
+        await bridge.send_broadcast(targets, message)
+
+    hass.services.async_register(DOMAIN, "send_broadcast", handle_send_broadcast)
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

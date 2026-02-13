@@ -23,3 +23,20 @@ send_message:
       selector:
         text:
 
+
+send_broadcast:
+  name: Send Broadcast
+  description: Send a message to multiple targets (numbers or groups).
+  fields:
+    message:
+      name: Message
+      description: The content of the message.
+      required: true
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: A list of phone numbers or group names.
+      required: true
+      selector:
+        object:

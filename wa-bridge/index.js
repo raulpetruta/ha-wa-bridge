@@ -62,37 +62,24 @@ wss.on('connection', (ws) => {
 
             if (data.type === 'send_message') {
                 const { number, message: text, group_name } = data;
-                let chatId = number;
-
-                if (group_name) {
-                    console.log(`Attempting to send message to group: ${group_name}`);
-                    try {
-                        const chats = await client.getChats();
-                        const group = chats.find(chat => chat.isGroup && chat.name.toLowerCase() === group_name.toLowerCase());
-                        
-                        if (group) {
-                            chatId = group.id._serialized;
-                            console.log(`Found group '${group.name}' with ID: ${chatId}`);
-                        } else {
-                            console.error(`Group '${group_name}' not found.`);
-                            return; // Stop processing if group specified but not found
-                        }
-                    } catch (err) {
-                        console.error('Error fetching chats:', err);
-                        return;
-                    }
-                } else if (chatId && !chatId.includes('@')) {
-                     // Basic format check for number (e.g. 1234567890@c.us)
-                    // If user sends just number, append suffix if needed, but usually HA sends full ID or we handle it
-                    // whatsapp-web.js expects '1234567890@c.us' for person or '@g.us' for group
-                    chatId = `${chatId}@c.us`;
-                }
-
-                if (chatId) {
-                    await client.sendMessage(chatId, text);
-                    console.log(`Sent message to ${chatId}: ${text}`);
+                await handleSendMessage(number, text, group_name);
+            } else if (data.type === 'broadcast') {
+                const { targets, message: text } = data;
+                if (Array.isArray(targets) && targets.length > 0) {
+                   console.log(`Broadcasting message to ${targets.length} targets.`);
+                   for (const target of targets) {
+                       // Heuristic: if it looks like a number, treat as number, otherwise try group
+                       // But since we don't know for sure, we can try to find a group first, if not, assume number
+                       // Or simple heuristic: if it contains only digits, assume number.
+                       
+                       // Better approach for "targets":
+                       // If the user provides a list, we try to find a group with that name.
+                       // If no group is found, we assume it's a number.
+                       
+                       await handleSendMessage(target, text, target); // Try both (number=target, group=target) checks inside
+                   }
                 } else {
-                     console.error('No valid destination (number or group_name) provided.');
+                    console.error('No targets provided for broadcast.');
                 }
             }
         } catch (error) {
@@ -100,6 +87,52 @@ wss.on('connection', (ws) => {
         }
     });
 });
+
+async function handleSendMessage(number, text, group_name) {
+    let chatId = number;
+
+    if (group_name) {
+        // optimistically try to find a group first if group_name is provided (or if we are guessing)
+        try {
+            const chats = await client.getChats();
+            const group = chats.find(chat => chat.isGroup && chat.name.toLowerCase() === group_name.toLowerCase());
+            
+            if (group) {
+                chatId = group.id._serialized;
+                console.log(`Found group '${group.name}' with ID: ${chatId}`);
+            }
+        } catch (err) {
+            console.error('Error fetching chats:', err);
+        }
+    }
+
+    // If we didn't find a group (or weren't looking for one specially), and we have a potential number
+    // But wait, if we are in broadcast mode, 'number' and 'group_name' are the same string 'target'.
+    // If we found a group above, chatId is set to group ID.
+    // If we didn't find a group, logic below should handle number.
+    
+    // However, if logic above failed to find a group, chatId is still 'group_name' (which is 'target') because of how I called it.
+    // So if I call handleSendMessage(target, text, target), 'number' is 'target'.
+    
+    // Check if chatId is a valid JID (contains @)
+    if (chatId && !chatId.includes('@')) {
+         // Basic format check for number (e.g. 1234567890@c.us)
+        // whatsapp-web.js expects '1234567890@c.us' for person
+        chatId = `${chatId}@c.us`;
+    }
+
+    if (chatId) {
+        try {
+            await client.sendMessage(chatId, text);
+            console.log(`Sent message to ${chatId}: ${text}`);
+        } catch (sendErr) {
+            console.error(`Failed to send message to ${chatId}:`, sendErr);
+        }
+    } else {
+         console.error('No valid destination (number or group_name) provided.');
+    }
+}
+
 
 // Broadcast helper
 function broadcast(data) {
