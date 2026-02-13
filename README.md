@@ -38,8 +38,8 @@ service: whatsapp.send_broadcast
 data:
   message: "Hello everyone! This is a broadcast."
   targets:
-    - "40741234567"        # Phone number
     - "Family Group"      # Group name
+    - "40741234567"       # Phone number
 ```
 
 ### Sending Media
@@ -59,7 +59,7 @@ Ensure the path is accessible by Home Assistant (e.g., in `config/www`).
 ```yaml
 service: whatsapp.send_broadcast
 data:
-  targets: ["Family Group"]
+  targets: ["Family Group", "40741234567"]
   message: "Security Snapshot"
   media_path: "/config/www/camera_snapshot.jpg"
 ```
