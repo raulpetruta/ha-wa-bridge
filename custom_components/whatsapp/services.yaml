@@ -22,4 +22,45 @@ send_message:
       required: true
       selector:
         text:
+    media_url:
+      name: Media URL
+      description: URL of the media file to send (optional).
+      required: false
+      selector:
+        text:
+    media_path:
+      name: Media Path
+      description: Local path to the media file to send (optional).
+      required: false
+      selector:
+        text:
 
+
+send_broadcast:
+  name: Send Broadcast
+  description: Send a message to multiple targets (numbers or groups).
+  fields:
+    message:
+      name: Message
+      description: The content of the message.
+      required: true
+      selector:
+        text:
+    media_url:
+      name: Media URL
+      description: URL of the media file to send (optional).
+      required: false
+      selector:
+        text:
+    media_path:
+      name: Media Path
+      description: Local path to the media file to send (optional).
+      required: false
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: A list of phone numbers or group names.
+      required: true
+      selector:
+        object:
