@@ -30,6 +30,18 @@ data:
   message: "Dinner is ready! 🍽️"
 ```
 
+## Sending Broadcast Messages
+You can send messages to multiple targets using the service:
+
+```yaml
+service: whatsapp.send_broadcast
+data:
+  message: "Hello everyone! This is a broadcast."
+  targets:
+    - "40741234567"        # Phone number
+    - "Family Group"      # Group name
+```
+
 ### Automation Trigger
 Trigger actions when a specific message is received:
 
