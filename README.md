@@ -393,6 +393,7 @@ All options are also available as environment variables:
 1.  Go to **Settings > Devices & Services**.
 2.  Click **Add Integration** and search for **WhatsApp**.
 4.  **Click Submit**. The integration will be added immediately.
+    1. **if asked** for a host, see the WhatsApp Bridge Add-on for **hostname**(info-tab) and **port**(configuration-tab), eg. "ws://cf9fc682-ha-wa-bridge:3000"
 5.  Check your **Home Assistant Notifications** (bell icon) for the QR code.
 6.  **Scan the QR Code** with your WhatsApp mobile app (Linked Devices).
 
