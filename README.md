@@ -233,6 +233,7 @@ trigger:
   - platform: whatsapp
     from_group_id: "120363012345678901"
     contains_text: "Dinner" # Optional
+    equals_text: "Dinner ready" # Optional
 action:
   - service: notify.persistent_notification
     data:
@@ -247,6 +248,7 @@ trigger:
   - platform: whatsapp
     from_group: "Announcements" # Exact channel name
     contains_text: "update" # Optional
+    equals_text: "update received" # Optional
 action:
   - service: notify.persistent_notification
     data:
