@@ -13,6 +13,7 @@ TRIGGER_SCHEMA = cv.TRIGGER_BASE_SCHEMA.extend(
         vol.Optional("from_group"): cv.string,
         vol.Optional("from_group_id"): cv.string,
         vol.Optional("contains_text"): cv.string,
+        vol.Optional("equals_text"): cv.string,
     }
 )
 
@@ -27,6 +28,7 @@ async def async_attach_trigger(
     from_group = config.get("from_group")
     from_group_id = config.get("from_group_id")
     contains_text = config.get("contains_text")
+    equals_text = config.get("equals_text")
 
     async def event_listener(event):
         """Handle the event."""
@@ -59,6 +61,10 @@ async def async_attach_trigger(
         # Check content if configured
         if contains_text:
             if contains_text.lower() not in body.lower():
+                return
+            
+        if equals_text:
+            if equals_text.lower() != body.lower():
                 return
 
         await action(
