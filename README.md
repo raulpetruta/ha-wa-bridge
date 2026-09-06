@@ -233,6 +233,7 @@ trigger:
   - platform: whatsapp
     from_group_id: "120363012345678901"
     contains_text: "Dinner" # Optional
+    equals_text: "Dinner ready" # Optional
 action:
   - service: notify.persistent_notification
     data:
@@ -247,6 +248,7 @@ trigger:
   - platform: whatsapp
     from_group: "Announcements" # Exact channel name
     contains_text: "update" # Optional
+    equals_text: "update received" # Optional
 action:
   - service: notify.persistent_notification
     data:
@@ -391,6 +393,7 @@ All options are also available as environment variables:
 1.  Go to **Settings > Devices & Services**.
 2.  Click **Add Integration** and search for **WhatsApp**.
 4.  **Click Submit**. The integration will be added immediately.
+    1. **if asked** for a host, see the WhatsApp Bridge Add-on for **hostname**(info-tab) and **port**(configuration-tab), eg. "ws://cf9fc682-ha-wa-bridge:3000"
 5.  Check your **Home Assistant Notifications** (bell icon) for the QR code.
 6.  **Scan the QR Code** with your WhatsApp mobile app (Linked Devices).
 
