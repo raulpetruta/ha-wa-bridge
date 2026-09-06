@@ -7,5 +7,5 @@
   "documentation": "https://github.com/raulpetruta/ha-wa-bridge",
   "iot_class": "local_push",
   "requirements": ["qrcode>=7.0"],
-  "version": "2.0.1"
+  "version": "2.0.2"
 }

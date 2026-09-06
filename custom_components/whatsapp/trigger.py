@@ -33,28 +33,57 @@ async def async_attach_trigger(
     async def event_listener(event):
         """Handle the event."""
         data = event.data
+
         sender = data.get("from")
         body = data.get("body", "")
         chat_name = data.get("chatName")
         group_id = data.get("groupId")
         is_group = data.get("isGroup", False)
 
+        # WhatsApp sends own messages in groups with:
+        #   from: <own-lid>
+        #   to: <group-id>@g.us
+        #
+        # In this case groupId/isGroup may not be present in the
+        # Home Assistant event, so derive them from "to".
+        to = data.get("to", "")
+
+        if to and to.endswith("@g.us"):
+            is_group = True
+
+            # If groupId wasn't supplied by the bridge, derive it
+            # from the WhatsApp group JID.
+            if not group_id:
+                group_id = to
+
         # Check sender (from_number)
         if from_number:
             if sender != from_number and sender != f"{from_number}@c.us":
                 return
 
-        # Check group by ID (from_group_id) — preferred, stable identifier
+        # Check group by ID (from_group_id)
         if from_group_id:
             if not is_group:
                 return
-            if not group_id or from_group_id not in group_id:
+
+            if not group_id:
+                return
+
+            # Accept both:
+            #   120363428656253626
+            # and
+            #   120363428656253626@g.us
+            normalized_group_id = group_id.removesuffix("@g.us")
+            normalized_from_group_id = from_group_id.removesuffix("@g.us")
+
+            if normalized_group_id != normalized_from_group_id:
                 return
 
         # Check group by name (from_group)
         if from_group:
             if not is_group:
                 return
+
             if not chat_name or chat_name.lower() != from_group.lower():
                 return
 
@@ -62,9 +91,9 @@ async def async_attach_trigger(
         if contains_text:
             if contains_text.lower() not in body.lower():
                 return
-            
+
         if equals_text:
-            if equals_text.lower() != body.lower():
+            if equals_text.strip().lower() != body.strip().lower():
                 return
 
         await action(
@@ -76,7 +105,10 @@ async def async_attach_trigger(
                     "from_number": sender,
                     "from_group": chat_name,
                     "from_group_id": group_id,
-                    "description": f"WhatsApp message from {chat_name if is_group else sender}",
+                    "description": (
+                        f"WhatsApp message from "
+                        f"{chat_name if is_group else sender}"
+                    ),
                 }
             },
             event.context,
