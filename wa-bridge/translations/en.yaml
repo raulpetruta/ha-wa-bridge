@@ -29,3 +29,10 @@ configuration:
       Optional. Phone numbers in international format without '+' (e.g. 40741234567).
       When set, only messages from these numbers are forwarded. Required for
       'numbers_only' mode; also works as an extra filter in 'all' mode.
+  media_download_path:
+    name: Media Download Path
+    description: >-
+      Optional directory where received photos, videos, and files are saved.
+      Leave empty to skip downloads. The add-on can write under /config, for
+      example /config/www/whatsapp-media. The saved path is included on the
+      message event as mediaPath. The same incoming-message filters apply.

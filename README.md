@@ -414,6 +414,22 @@ If you are using the Home Assistant Add-on, you can configure the following opti
   ```
   Leave empty (default) to apply no number filter.
 
+- **`media_download_path`**: Optional directory for received photos, videos, and files. Leave empty to skip downloads. The add-on can write anywhere under `/config`. Example:
+  ```yaml
+  media_download_path: /config/www/whatsapp-media
+  ```
+  Files that pass the incoming-message filters are saved there. The message event includes `mediaPath`, `mediaFilename`, and `mediaMimetype`. Use `allowed_groups` if you only want one group's photos.
+
+  ```yaml
+  trigger:
+    - platform: whatsapp
+      from_group: "Photo Updates"
+  action:
+    - service: notify.persistent_notification
+      data:
+        message: "Saved {{ trigger.event.mediaPath }}"
+  ```
+
 ### Docker Compose Configuration
 All options are also available as environment variables:
 ```yaml
@@ -427,6 +443,8 @@ All options are also available as environment variables:
       - ALLOWED_GROUPS=Family Group,Work Team
       # Comma-separated phone numbers without '+' (optional)
       - ALLOWED_NUMBERS=40741234567,49123456789
+      # Directory for received media. Mount this path into the container.
+      # - MEDIA_DOWNLOAD_PATH=/media/whatsapp
 ```
 
 ### Integration Setup

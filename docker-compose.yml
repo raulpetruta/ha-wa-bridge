@@ -10,6 +10,7 @@ services:
     volumes:
       - ./wa-bridge/.wwebjs_auth:/usr/src/app/.wwebjs_auth
       - ./wa-bridge/.wwebjs_cache:/usr/src/app/.wwebjs_cache
+      # - ./wa-media:/media/whatsapp # Mount the folder used by MEDIA_DOWNLOAD_PATH
     environment:
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -18,3 +19,4 @@ services:
       - INCOMING_MESSAGE_LOG_LEVEL=FULL # FULL = log entire payload (default), COMPACT = sender & type only, NONE = no incoming message logs
       # - ALLOWED_NUMBERS=40741234567 # Set to allow only messages from specific numbers
       # - ALLOWED_GROUPS=Family Group,Work Team # Set to allow only messages from specific groups
+      # - MEDIA_DOWNLOAD_PATH=/media/whatsapp # Save received photos and files into the mounted folder
