@@ -11,18 +11,49 @@ import aiohttp
 import mimetypes
 import os
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_set_service_schema
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.components import persistent_notification
 
-from .const import DOMAIN, CONF_HOST, DEFAULT_HOST, EVENT_MESSAGE_RECEIVED, EVENT_POLL_VOTE_RECEIVED, EVENT_GROUPS_RECEIVED
+from .const import (
+    CONF_GROUP,
+    CONF_GROUP_ID,
+    CONF_HOST,
+    CONF_NUMBER,
+    DEFAULT_HOST,
+    DOMAIN,
+    EVENT_GROUPS_RECEIVED,
+    EVENT_MESSAGE_RECEIVED,
+    EVENT_POLL_VOTE_RECEIVED,
+    NOTIFY_SERVICE_NAME,
+)
 from .client import WhatsAppBridge
+from .notify_targets import (
+    destination_from_target,
+    format_notify_message,
+    normalize_phone_number,
+    normalize_text,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [Platform.NOTIFY]
+
+NOTIFY_DOMAIN = "notify"
+NOTIFY_CALL_SCHEMA = vol.Schema(
+    {
+        vol.Required("message"): cv.string,
+        vol.Optional("title"): cv.string,
+        vol.Optional("target"): vol.All(cv.ensure_list, [vol.Coerce(str)]),
+        vol.Optional("data"): dict,
+    }
+)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the WhatsApp Integration component."""
@@ -146,6 +177,86 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "send_message", handle_send_message)
 
+    async def handle_notify(call: ServiceCall) -> None:
+        """Send a message through the standard notify.whatsapp service."""
+        bridges = hass.data.get(DOMAIN) or {}
+        active_bridge = bridges.get(entry.entry_id) or next(iter(bridges.values()), None)
+        if active_bridge is None:
+            _LOGGER.error("WhatsApp bridge is not loaded")
+            return
+
+        extra = call.data.get("data") or {}
+        message = format_notify_message(call.data.get("message", ""), call.data.get("title"))
+        media = await get_media_data(hass, extra.get("media_url"), extra.get("media_path"))
+        number = normalize_phone_number(extra.get(CONF_NUMBER))
+        group = normalize_text(extra.get(CONF_GROUP)) or None
+        group_id = normalize_text(extra.get(CONF_GROUP_ID)) or None
+        number = number if number.isdigit() else None
+
+        destinations: list[tuple[str | None, str | None, str | None]] = []
+        if number or group or group_id:
+            destinations.append((number, group, group_id))
+        else:
+            for item in call.data.get("target") or []:
+                parsed = destination_from_target(item)
+                if any(parsed):
+                    destinations.append(parsed)
+
+        if not destinations:
+            _LOGGER.error(
+                "notify.whatsapp requires a target, or data.number, data.group, or data.group_id"
+            )
+            return
+
+        for dest_number, dest_group, dest_group_id in destinations:
+            await active_bridge.send_message(
+                dest_number, message, dest_group, dest_group_id, media
+            )
+
+    hass.services.async_register(
+        NOTIFY_DOMAIN,
+        NOTIFY_SERVICE_NAME,
+        handle_notify,
+        schema=NOTIFY_CALL_SCHEMA,
+    )
+    async_set_service_schema(
+        hass,
+        NOTIFY_DOMAIN,
+        NOTIFY_SERVICE_NAME,
+        {
+            "name": "Send WhatsApp notification",
+            "description": (
+                "Send a WhatsApp message. Use target for a phone number or group name, "
+                "or data.number, data.group, or data.group_id."
+            ),
+            "fields": {
+                "message": {
+                    "name": "Message",
+                    "description": "Notification message.",
+                    "required": True,
+                    "selector": {"text": None},
+                },
+                "title": {
+                    "name": "Title",
+                    "description": "Optional title, sent as the first line.",
+                    "selector": {"text": None},
+                },
+                "target": {
+                    "name": "Target",
+                    "description": "Phone number (country code, no +) or group name. A list sends to each.",
+                    "selector": {"text": {"multiple": True}},
+                    "example": "40741234567",
+                },
+                "data": {
+                    "name": "Data",
+                    "description": "Optional number, group, group_id, media_url, or media_path.",
+                    "selector": {"object": None},
+                    "example": '{"group_id": "120363012345678901"}',
+                },
+            },
+        },
+    )
+
     async def handle_send_broadcast(call: ServiceCall):
         targets = call.data.get("targets", [])
         message = call.data.get("message")
@@ -230,12 +341,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "set_group_picture", handle_set_group_picture)
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     return True
 
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
     bridge = hass.data[DOMAIN].pop(entry.entry_id)
     await bridge.stop()
+
+    if not hass.data[DOMAIN] and hass.services.has_service(NOTIFY_DOMAIN, NOTIFY_SERVICE_NAME):
+        hass.services.async_remove(NOTIFY_DOMAIN, NOTIFY_SERVICE_NAME)
+
     return True

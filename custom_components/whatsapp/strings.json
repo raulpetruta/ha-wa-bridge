@@ -23,5 +23,47 @@
     "abort": {
       "already_configured": "Device is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "WhatsApp notifications",
+        "description": "Saved chats become notify entities for notify.send_message.\n\nYou can also call notify.whatsapp with a target when the chat is not saved here.\n\n{targets}",
+        "menu_options": {
+          "add_target": "Add notification target",
+          "remove_target": "Remove notification target"
+        }
+      },
+      "add_target": {
+        "title": "Add notification target",
+        "description": "Enter a name and one destination. This creates a notify entity for that chat.",
+        "data": {
+          "name": "Name",
+          "number": "Phone number",
+          "group": "Group name",
+          "group_id": "Group ID"
+        },
+        "data_description": {
+          "name": "Shown on the notify entity, for example Family.",
+          "number": "Country code plus number, without +. Leave empty when using a group.",
+          "group": "Exact WhatsApp group name. Leave empty when using a number or group ID.",
+          "group_id": "Stable group ID from get_groups. Leave empty when using a number or group name."
+        }
+      },
+      "remove_target": {
+        "title": "Remove notification target",
+        "description": "The notify entity for this chat will be removed.",
+        "data": {
+          "id": "Target"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Name is required.",
+      "name_exists": "A notification target with this name already exists.",
+      "invalid_number": "Enter the phone number with country code, without +.",
+      "missing_destination": "Enter a phone number, a group name, or a group ID.",
+      "multiple_destinations": "Enter only one destination: phone number, group name, or group ID."
+    }
   }
 }
