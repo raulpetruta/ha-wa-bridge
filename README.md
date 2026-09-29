@@ -7,6 +7,7 @@ A custom integration to send and receive WhatsApp messages in Home Assistant nat
 
 ## Features
 - **Send Messages**: Use the `whatsapp.send_message` service in HA.
+- **Notify**: Use the standard `notify.whatsapp` service, or save a chat as a notify entity and call `notify.send_message`.
 - **Group Messaging**: Send messages to WhatsApp groups by name or by group ID.
 - **Group ID Support**: Target groups by their stable ID instead of name — automations won't break when a group is renamed.
 - **Get Groups**: Retrieve all WhatsApp groups with their IDs using the `whatsapp.get_groups` service.
@@ -48,6 +49,46 @@ data:
   group_id: "120363012345678901" # Group ID (use get_groups to find this)
   message: "Dinner is ready! 🍽️"
 ```
+
+### Notify
+
+`notify.whatsapp` sends a text message with Home Assistant's standard notify fields. `target` is a phone number (country code, no `+`) or a group name. A list sends the same message to each chat. An optional `title` is sent as the first line.
+
+```yaml
+action: notify.whatsapp
+data:
+  message: "Hello from Home Assistant! 🏠"
+  target: "40741234567"
+```
+
+Use `data` for a group ID, or to attach a file:
+
+```yaml
+action: notify.whatsapp
+data:
+  message: "Dinner is ready! 🍽️"
+  data:
+    group_id: "120363012345678901" # OR number / group, plus optional media_url or media_path
+```
+
+Saved chats also show up as notify entities, so you can pick them in the automation editor.
+
+1. Open **Settings → Devices & services → WhatsApp Integration → Configure**.
+2. Add a notification target.
+3. Name the chat and set one destination: a phone number, a group name, or a group ID.
+
+A target named `Family` shows up as `notify.whatsapp_family`.
+
+```yaml
+action: notify.send_message
+target:
+  entity_id: notify.whatsapp_family
+data:
+  message: "Dinner is ready! 🍽️"
+  title: "Home" # Optional. Sent as the first line.
+```
+
+`whatsapp.send_message` is unchanged.
 
 ### Retrieving Group IDs
 Use the `whatsapp.get_groups` service to retrieve all your WhatsApp groups with their IDs. The results are fired as a `whatsapp_groups_received` event.
