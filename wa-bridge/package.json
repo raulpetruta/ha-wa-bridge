@@ -12,9 +12,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "qrcode": "^1.5.4",
-    "@whiskeysockets/baileys": "6.7.24",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
     "ws": "^8.19.0"
   }
 }

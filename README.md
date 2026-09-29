@@ -296,12 +296,12 @@ action:
       message: "New channel update received!"
 ```
 
-For more stable automations, use `from_group_id` with the channel's numeric ID (without `@g.us`). The ID remains the same even if the channel is renamed:
+For more stable automations, use `from_group_id` with the channel's numeric ID. Channel events use a `@newsletter` id. A bare number still matches, with or without `@g.us` or `@newsletter`. The ID remains the same even if the channel is renamed:
 
 ```yaml
 trigger:
   - platform: whatsapp
-    from_group_id: "120363428200052636" # Channel ID (use get_groups or check bridge logs)
+    from_group_id: "120363428200052636" # Channel ID from the bridge logs
     contains_text: "update" # Optional
 action:
   - service: notify.persistent_notification
@@ -318,7 +318,7 @@ action:
 2.  Click the **dots (top-right) > Repositories**.
 3.  Add this repository URL: `https://github.com/raulpetruta/ha-wa-bridge`
 4.  Reload the store and install **WhatsApp Bridge**.
-5.  Start the Add-on. Accounts linked before v2.4.0 need to scan the QR code again. The bridge no longer keeps a browser session.
+5.  Start the Add-on. Accounts linked before v2.4.0 need to scan the QR code again. The bridge no longer keeps a browser session. Logging out of the linked device clears the saved session and waits for you to restart the add-on before it shows a new QR code.
 
 #### Option B: Docker (For Container/Core users)
 This project requires a small bridge service. Create a `docker-compose.yaml` file with the following content:

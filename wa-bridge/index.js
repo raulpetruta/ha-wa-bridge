@@ -73,6 +73,7 @@ let downloadMediaMessage;
 let getAggregateVotesInPollMessage;
 let generateWAMessageFromContent;
 let Browsers;
+let isLidUser;
 
 let sock = null;
 let starting = false;
@@ -82,6 +83,9 @@ const groupsByJid = new Map();
 const groupsByName = new Map();
 const pollMessages = new Map();
 const pollVoteState = new Map();
+const pollStorePath = path.join(authPath, 'polls.json');
+const MAX_STORED_POLLS = 200;
+const NOT_READY_ERROR = 'Bridge is not connected to WhatsApp.';
 
 console.log(`Incoming messages mode: ${incomingMode}`);
 console.log(`Incoming message log level: ${incomingLogLevel}`);
@@ -147,7 +151,52 @@ function logIncomingData(type, data, rawObj) {
 
 function toLegacyJid(jid) {
     if (!jid) return jid;
-    return String(jid).replace(/@s\.whatsapp\.net$/, '@c.us');
+    const value = String(jid);
+    const at = value.lastIndexOf('@');
+    if (at === -1) return value;
+    let user = value.slice(0, at);
+    const domain = value.slice(at + 1);
+    if (domain !== 's.whatsapp.net' && domain !== 'c.us') return value;
+    if (user.includes(':')) user = user.split(':')[0];
+    return `${user}@c.us`;
+}
+
+function isLidJid(jid) {
+    if (typeof isLidUser === 'function') return isLidUser(String(jid));
+    return String(jid || '').endsWith('@lid');
+}
+
+function isGroupChat(jid) {
+    const value = String(jid || '');
+    return value.endsWith('@g.us') || value.endsWith('@newsletter');
+}
+
+function isLoggedOut(statusCode) {
+    const loggedOut = DisconnectReason?.loggedOut ?? 401;
+    return statusCode === loggedOut;
+}
+
+async function toPhoneJid(jid) {
+    if (!jid) return '';
+    let value = String(jid);
+    if (isLidJid(value)) {
+        const store = sock?.signalRepository?.lidMapping;
+        try {
+            const pn = store ? await store.getPNForLID(value) : null;
+            if (pn) value = pn;
+            else console.error(`No phone number is known yet for ${value}.`);
+        } catch (err) {
+            console.error(`Error mapping ${value} to a phone number:`, err);
+        }
+    }
+    return toLegacyJid(value);
+}
+
+async function senderPhoneJid(key, isGroup) {
+    const alt = isGroup ? key?.participantAlt : key?.remoteJidAlt;
+    const primary = isGroup ? (key?.participant || key?.remoteJid) : key?.remoteJid;
+    if (alt && !isLidJid(alt)) return toLegacyJid(alt);
+    return toPhoneJid(primary || alt);
 }
 
 function phoneFromJid(jid) {
@@ -160,7 +209,8 @@ function phoneFromJid(jid) {
 }
 
 function toGroupJid(id) {
-    const raw = String(id).replace(/@g\.us$/, '');
+    const raw = String(id);
+    if (raw.endsWith('@g.us') || raw.endsWith('@newsletter')) return raw;
     return `${raw}@g.us`;
 }
 
@@ -211,11 +261,71 @@ function pollKey(key) {
     return `${key.remoteJid}:${key.id}`;
 }
 
+function toStorable(value) {
+    if (value == null) return value;
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+        return { __b64: Buffer.from(value).toString('base64') };
+    }
+    if (Array.isArray(value)) return value.map(toStorable);
+    if (typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) out[key] = toStorable(item);
+        return out;
+    }
+    return value;
+}
+
+function fromStorable(value) {
+    if (value == null) return value;
+    if (typeof value === 'object' && !Array.isArray(value) && typeof value.__b64 === 'string' && Object.keys(value).length === 1) {
+        return Buffer.from(value.__b64, 'base64');
+    }
+    if (Array.isArray(value)) return value.map(fromStorable);
+    if (typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) out[key] = fromStorable(item);
+        return out;
+    }
+    return value;
+}
+
+function loadStoredPolls() {
+    try {
+        if (!fs.existsSync(pollStorePath)) return;
+        const stored = fromStorable(JSON.parse(fs.readFileSync(pollStorePath, 'utf8')));
+        if (!Array.isArray(stored)) return;
+        for (const item of stored) {
+            if (item?.id && item?.msg) pollMessages.set(item.id, item.msg);
+        }
+        if (pollMessages.size > 0) console.log(`Loaded ${pollMessages.size} stored polls.`);
+    } catch (err) {
+        console.error('Error loading stored polls:', err);
+    }
+}
+
+function saveStoredPolls() {
+    try {
+        const items = [...pollMessages.entries()]
+            .slice(-MAX_STORED_POLLS)
+            .map(([id, msg]) => ({ id, msg }));
+        fs.mkdirSync(path.dirname(pollStorePath), { recursive: true });
+        fs.writeFileSync(pollStorePath, JSON.stringify(toStorable(items)));
+    } catch (err) {
+        console.error('Error saving stored polls:', err);
+    }
+}
+
 function rememberPoll(msg) {
     const content = unwrapMessage(msg?.message);
     if (!content?.pollCreationMessage && !content?.pollCreationMessageV3) return;
     const key = pollKey(msg.key);
-    if (key) pollMessages.set(key, msg);
+    if (!key) return;
+    pollMessages.set(key, { key: msg.key, message: msg.message });
+    while (pollMessages.size > MAX_STORED_POLLS) {
+        const oldest = pollMessages.keys().next().value;
+        pollMessages.delete(oldest);
+    }
+    saveStoredPolls();
 }
 
 function rememberGroup(group) {
@@ -249,19 +359,53 @@ async function groupName(jid) {
     }
 }
 
+async function chatDisplayName(jid) {
+    if (String(jid).endsWith('@newsletter')) {
+        const cached = groupsByJid.get(jid);
+        if (cached?.subject) return cached.subject;
+        try {
+            const meta = await sock.newsletterMetadata('jid', jid);
+            if (meta?.name) {
+                rememberGroup({ id: jid, subject: meta.name });
+                return meta.name;
+            }
+        } catch (err) {
+            console.error(`Error fetching channel ${jid}:`, err);
+        }
+        return '';
+    }
+    return groupName(jid);
+}
+
 const PORT = 3000;
 
-const wss = new WebSocketServer({ port: PORT });
-
-console.log(`WebSocket server started on port ${PORT}`);
+let wss = null;
 
 function broadcast(data) {
+    if (!wss) return;
     wss.clients.forEach(client => {
         if (client.readyState === 1) {
             client.send(JSON.stringify(data));
         }
     });
 }
+
+function replyNotReady(ws, data) {
+    console.error(NOT_READY_ERROR);
+    if (data.type === 'get_groups') {
+        ws.send(JSON.stringify({ type: 'get_groups_response', data: [], error: NOT_READY_ERROR }));
+    } else if (data.type === 'set_group_subject') {
+        ws.send(JSON.stringify({ type: 'set_group_subject_response', success: false, error: NOT_READY_ERROR }));
+    } else if (data.type === 'set_group_picture') {
+        ws.send(JSON.stringify({ type: 'set_group_picture_response', success: false, error: NOT_READY_ERROR }));
+    }
+}
+
+function attachServer() {
+    wss = new WebSocketServer({ port: PORT });
+    wss.on('listening', () => {
+        console.log(`WebSocket server started on port ${PORT}`);
+    });
 
 wss.on('connection', (ws) => {
     console.log('New client connected');
@@ -280,7 +424,7 @@ wss.on('connection', (ws) => {
             console.log('Received command:', data);
 
             if (!sock || !isReady) {
-                console.error('Bridge is not connected to WhatsApp.');
+                replyNotReady(ws, data);
                 return;
             }
 
@@ -317,6 +461,7 @@ wss.on('connection', (ws) => {
         }
     });
 });
+}
 
 async function resolveChatId(number, group_name, group_id) {
     if (group_id) {
@@ -527,12 +672,20 @@ async function handleIncomingMessage(msg) {
     if (msg.key.remoteJid === 'status@broadcast') return;
 
     const remoteJid = msg.key.remoteJid;
-    const isGroup = String(remoteJid).endsWith('@g.us');
-    const senderJid = toLegacyJid(isGroup ? (msg.key.participant || remoteJid) : remoteJid);
+    const isGroup = isGroupChat(remoteJid);
+    let senderJid = await senderPhoneJid(msg.key, isGroup);
+    if (String(senderJid).endsWith('@lid')) {
+        if (!isGroup) {
+            console.error(`Dropping direct message from ${senderJid} until a phone number is known.`);
+            return;
+        }
+        console.error(`Group message from ${senderJid} has no phone number yet.`);
+        senderJid = '';
+    }
     let chatName = '';
 
     if (isGroup) {
-        chatName = await groupName(remoteJid);
+        chatName = await chatDisplayName(remoteJid);
     }
 
     if (!passesIncomingFilters({ isGroup, chatName, senderJid })) return;
@@ -541,7 +694,7 @@ async function handleIncomingMessage(msg) {
     const content = unwrapMessage(msg.message);
     const payloadData = {
         from: isGroup ? remoteJid : senderJid,
-        to: isGroup ? remoteJid : toLegacyJid(sock.user?.id),
+        to: isGroup ? remoteJid : await toPhoneJid(sock.user?.id),
         body: messageBody(msg.message),
         timestamp: Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000),
         hasMedia: Boolean(info),
@@ -575,16 +728,20 @@ async function handleIncomingMessage(msg) {
     broadcast({ type: 'message', data: payloadData });
 }
 
-function emitPollVotes(key, votes) {
+async function emitPollVotes(key, votes) {
     const id = pollKey(key);
     const previous = pollVoteState.get(id) || new Map();
     const next = new Map();
-    const isGroup = String(key.remoteJid).endsWith('@g.us');
-    const chatName = isGroup ? (groupsByJid.get(key.remoteJid)?.subject || '') : '';
+    const isGroup = isGroupChat(key.remoteJid);
+    const chatName = isGroup ? await chatDisplayName(key.remoteJid) : '';
 
     for (const option of votes) {
         for (const voterJid of option.voters) {
-            const legacy = toLegacyJid(voterJid);
+            const legacy = await toPhoneJid(voterJid);
+            if (String(legacy).endsWith('@lid')) {
+                console.error(`Skipping poll vote from ${voterJid} until a phone number is known.`);
+                continue;
+            }
             const selected = next.get(legacy) || [];
             selected.push({ name: option.name });
             next.set(legacy, selected);
@@ -641,12 +798,18 @@ async function handleConnectionUpdate(update) {
     if (connection === 'close') {
         isReady = false;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const loggedOut = statusCode === DisconnectReason.loggedOut;
+        const loggedOut = isLoggedOut(statusCode);
         console.error('WhatsApp connection closed', statusCode || lastDisconnect?.error || '');
 
         if (loggedOut) {
             broadcast({ type: 'status', status: 'auth_failure' });
-            await fs.promises.rm(authPath, { recursive: true, force: true });
+            try {
+                await fs.promises.rm(authPath, { recursive: true, force: true });
+            } catch (err) {
+                console.error('Error clearing WhatsApp session:', err);
+            }
+            console.error('WhatsApp logged out. Restart the add-on to scan a new QR code.');
+            return;
         }
 
         setTimeout(() => {
@@ -691,7 +854,7 @@ async function startSocket() {
                     }
                 }
             });
-            socket.ev.on('messages.update', (updates) => {
+            socket.ev.on('messages.update', async (updates) => {
                 for (const { key, update } of updates) {
                     if (!update?.pollUpdates || !key) continue;
                     const stored = pollMessages.get(pollKey(key));
@@ -704,7 +867,7 @@ async function startSocket() {
                             message: stored.message,
                             pollUpdates: update.pollUpdates,
                         }, socket.user?.id);
-                        emitPollVotes(key, votes);
+                        await emitPollVotes(key, votes);
                     } catch (err) {
                         console.error('Error handling poll vote:', err);
                     }
@@ -728,7 +891,9 @@ async function startClient() {
             getAggregateVotesInPollMessage,
             generateWAMessageFromContent,
             Browsers,
+            isLidUser,
         } = baileys);
+        loadStoredPolls();
         await new Promise(resolve => setTimeout(resolve, 2000));
         await startSocket();
     } catch (err) {
@@ -742,4 +907,23 @@ if (incomingMode === 'disabled') {
     console.log('Incoming message handling is DISABLED. The bridge will not forward any received messages to Home Assistant.');
 }
 
-startClient();
+if (require.main === module) {
+    attachServer();
+    startClient();
+}
+
+module.exports = {
+    toLegacyJid,
+    toPhoneJid,
+    toGroupJid,
+    isGroupChat,
+    isLoggedOut,
+    senderPhoneJid,
+    rememberPoll,
+    loadStoredPolls,
+    pollMessages,
+    phoneFromJid,
+    setSocket(next) {
+        sock = next;
+    },
+};
