@@ -50,6 +50,20 @@ data:
   message: "Dinner is ready! 🍽️"
 ```
 
+### Mentioning people
+`mentions` tags phone numbers in a group message. Use the country code and no `+`. A bare number, `number@c.us`, or `number@s.whatsapp.net` all work. If the message does not already contain `@number`, the bridge adds it so WhatsApp can highlight the person.
+
+```yaml
+service: whatsapp.send_message
+data:
+  group_id: "120363012345678901"
+  message: "hello world"
+  mentions:
+    - "40741234567"
+```
+
+Mentions are sent with text, photo, and video messages.
+
 ### Notify
 
 `notify.whatsapp` sends a text message with Home Assistant's standard notify fields. `target` is a phone number (country code, no `+`) or a group name. A list sends the same message to each chat. An optional `title` is sent as the first line.
