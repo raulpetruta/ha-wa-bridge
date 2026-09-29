@@ -1,6 +1,6 @@
 {
   "name": "ha-wa-bridge",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -13,7 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "qrcode": "^1.5.4",
-    "whatsapp-web.js": "^1.34.6",
+    "whatsapp-web.js": "https://codeload.github.com/wwebjs/whatsapp-web.js/tar.gz/064a3d5a5a3dce1281a6a12740b5a7051339d154",
     "ws": "^8.19.0"
   }
 }
