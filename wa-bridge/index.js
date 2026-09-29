@@ -2,6 +2,8 @@ const { Client, LocalAuth, MessageMedia, Poll, ScheduledEvent } = require('whats
 const { WebSocketServer } = require('ws');
 const qrcode = require('qrcode');
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 let configOptions = {};
 try {
@@ -41,13 +43,77 @@ const allowedNumbersSet = new Set(allowedNumbers.map(n => `${n}@c.us`));
 // Mode: 'FULL' (default) | 'COMPACT' | 'NONE'
 const incomingLogLevel = (configOptions.incoming_message_log_level || process.env.INCOMING_MESSAGE_LOG_LEVEL || 'FULL').toUpperCase();
 
+// Directory for received photos, videos, and files. Empty disables saving.
+// Add-on option media_download_path, or MEDIA_DOWNLOAD_PATH for Docker Compose.
+const mediaDownloadPath = String(configOptions.media_download_path || process.env.MEDIA_DOWNLOAD_PATH || '').trim();
+const mediaDownloadRoot = mediaDownloadPath ? path.resolve(mediaDownloadPath) : '';
+
+const MEDIA_EXTENSIONS = {
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'video/mp4': '.mp4',
+    'audio/ogg': '.ogg',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'application/pdf': '.pdf',
+};
+
 console.log(`Incoming messages mode: ${incomingMode}`);
 console.log(`Incoming message log level: ${incomingLogLevel}`);
+if (mediaDownloadRoot) {
+    console.log(`Incoming media will be saved to: ${mediaDownloadRoot}`);
+}
 if (allowedGroupsLower.length > 0) {
     console.log(`Allowed groups filter: ${allowedGroups.join(', ')}`);
 }
 if (allowedNumbersSet.size > 0) {
     console.log(`Allowed numbers filter: ${allowedNumbers.join(', ')}`);
+}
+
+function extensionForMedia(media) {
+    const fromName = media.filename ? path.extname(media.filename).toLowerCase() : '';
+    if (/^\.[a-z0-9]{1,8}$/.test(fromName)) {
+        return fromName;
+    }
+    const mime = String(media.mimetype || '').split(';')[0].trim().toLowerCase();
+    return MEDIA_EXTENSIONS[mime] || '';
+}
+
+function buildMediaFilename(media) {
+    const ext = extensionForMedia(media);
+    const stem = path.basename(media.filename || '', path.extname(media.filename || ''))
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .slice(0, 40);
+    const stamp = Math.floor(Date.now() / 1000);
+    const suffix = crypto.randomBytes(3).toString('hex');
+    return stem ? `${stamp}-${suffix}-${stem}${ext}` : `${stamp}-${suffix}${ext}`;
+}
+
+async function saveIncomingMedia(msg) {
+    const media = await msg.downloadMedia();
+    if (!media || !media.data) {
+        return null;
+    }
+
+    const filename = buildMediaFilename(media);
+    const target = path.resolve(mediaDownloadRoot, filename);
+    if (target !== mediaDownloadRoot && !target.startsWith(`${mediaDownloadRoot}${path.sep}`)) {
+        throw new Error(`Refusing to write outside ${mediaDownloadRoot}`);
+    }
+
+    await fs.promises.mkdir(mediaDownloadRoot, { recursive: true });
+    await fs.promises.writeFile(target, Buffer.from(media.data, 'base64'));
+    console.log(`Saved incoming media to ${target}`);
+    return {
+        path: target,
+        filename,
+        mimetype: media.mimetype || null,
+    };
 }
 
 // Helper to log incoming data based on log level
@@ -499,6 +565,19 @@ if (incomingMode !== 'disabled') {
             fromMe: msg.fromMe,
             ...chatInfo
         };
+
+        if (msg.hasMedia && mediaDownloadRoot) {
+            try {
+                const saved = await saveIncomingMedia(msg);
+                if (saved) {
+                    payloadData.mediaPath = saved.path;
+                    payloadData.mediaFilename = saved.filename;
+                    payloadData.mediaMimetype = saved.mimetype;
+                }
+            } catch (err) {
+                console.error('Error saving incoming media:', err);
+            }
+        }
 
         logIncomingData('MESSAGE', payloadData, msg);
 
