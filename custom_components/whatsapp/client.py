@@ -54,7 +54,7 @@ class WhatsAppBridge:
         if self._session:
             await self._session.close()
 
-    async def send_message(self, number: str | None, message: str, group_name: str | None = None, group_id: str | None = None, media: dict | None = None):
+    async def send_message(self, number: str | None, message: str, group_name: str | None = None, group_id: str | None = None, media: dict | None = None, mentions: list | None = None):
         """Send a message via the bridge."""
         if not self._ws or self._ws.closed:
             _LOGGER.warning("Bridge not connected, cannot send message")
@@ -76,6 +76,9 @@ class WhatsAppBridge:
 
         if media:
             payload["media"] = media
+
+        if mentions:
+            payload["mentions"] = mentions
 
         if not number and not group_name and not group_id:
              _LOGGER.error("Neither number, group_name, nor group_id provided")

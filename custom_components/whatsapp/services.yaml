@@ -28,6 +28,13 @@ send_message:
       required: true
       selector:
         text:
+    mentions:
+      name: Mentions
+      description: Phone numbers to mention. Country code, no +. @c.us is optional. Each number is appended to the message when it is not already written as @number.
+      required: false
+      selector:
+        text:
+          multiple: true
     media_url:
       name: Media URL
       description: URL of the media file to send (optional).

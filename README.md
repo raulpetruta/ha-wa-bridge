@@ -9,6 +9,7 @@ A custom integration to send and receive WhatsApp messages in Home Assistant nat
 - **Send Messages**: Use the `whatsapp.send_message` service in HA.
 - **Notify**: Use the standard `notify.whatsapp` service, or save a chat as a notify entity and call `notify.send_message`.
 - **Group Messaging**: Send messages to WhatsApp groups by name or by group ID.
+- **Mentions**: Tag people in a group message with a `mentions` list on `whatsapp.send_message`. A bare phone number is enough. The bridge adds `@number` when it is not already in the text.
 - **Group ID Support**: Target groups by their stable ID instead of name — automations won't break when a group is renamed.
 - **Get Groups**: Retrieve all WhatsApp groups with their IDs using the `whatsapp.get_groups` service.
 - **Set Group Subject**: Dynamically update a group's name using the `whatsapp.set_group_subject` service — perfect for automating group names based on schedules or sensor values.
@@ -49,6 +50,20 @@ data:
   group_id: "120363012345678901" # Group ID (use get_groups to find this)
   message: "Dinner is ready! 🍽️"
 ```
+
+### Mentioning people
+`mentions` tags phone numbers in a group message. Use the country code and no `+`. A bare number, `number@c.us`, or `number@s.whatsapp.net` all work. If the message does not already contain `@number`, the bridge adds it so WhatsApp can highlight the person.
+
+```yaml
+service: whatsapp.send_message
+data:
+  group_id: "120363012345678901"
+  message: "hello world"
+  mentions:
+    - "40741234567"
+```
+
+Mentions are sent with text, photo, and video messages.
 
 ### Notify
 

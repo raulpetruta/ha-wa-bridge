@@ -429,8 +429,8 @@ wss.on('connection', (ws) => {
             }
 
             if (data.type === 'send_message') {
-                const { number, message: text, group_name, group_id, media } = data;
-                await handleSendMessage(number, text, group_name, group_id, media);
+                const { number, message: text, group_name, group_id, media, mentions } = data;
+                await handleSendMessage(number, text, group_name, group_id, media, mentions);
             } else if (data.type === 'send_poll') {
                 const { number, group_name, group_id, message: pollQuestion, options, allow_multiple_answers } = data;
                 await handleSendPoll(number, group_name, group_id, pollQuestion, options, allow_multiple_answers);
@@ -493,20 +493,57 @@ async function resolveChatId(number, group_name, group_id) {
     return number ? toSendJid(number) : null;
 }
 
-function outgoingContent(text, media) {
+function mentionEntries(value) {
+    if (!value) return [];
+    const list = Array.isArray(value) ? value : String(value).split(',');
+    return list.map(item => String(item).trim()).filter(Boolean);
+}
+
+function mentionPhone(value) {
+    const user = String(value).split('@')[0].split(':')[0];
+    return user.replace(/\D/g, '');
+}
+
+function withMentions(text, rawMentions) {
+    const phones = [];
+    const mentions = [];
+    for (const entry of mentionEntries(rawMentions)) {
+        const phone = mentionPhone(entry);
+        if (!phone) continue;
+        const jid = `${phone}@s.whatsapp.net`;
+        if (mentions.includes(jid)) continue;
+        phones.push(phone);
+        mentions.push(jid);
+    }
+    if (!mentions.length) return { text: text || '' };
+    let body = text || '';
+    const missing = phones.filter(phone => !new RegExp(`@${phone}(?!\\d)`).test(body));
+    if (missing.length) {
+        const suffix = missing.map(phone => `@${phone}`).join(' ');
+        body = body ? `${body} ${suffix}` : suffix;
+    }
+    return { text: body, mentions };
+}
+
+function outgoingContent(text, media, rawMentions) {
+    const mentioned = withMentions(text, rawMentions);
     if (!media) {
-        return { text: text || '' };
+        return mentioned.mentions ? mentioned : { text: mentioned.text };
     }
 
     const buffer = Buffer.from(media.data, 'base64');
     const mime = media.mimetype || 'application/octet-stream';
     const caption = text || undefined;
 
-    if (mime.startsWith('image/')) {
-        return { image: buffer, caption, mimetype: mime };
+    if (mime.startsWith('image/') || mime.startsWith('video/')) {
+        const content = mime.startsWith('image/')
+            ? { image: buffer, caption: mentioned.text || undefined, mimetype: mime }
+            : { video: buffer, caption: mentioned.text || undefined, mimetype: mime };
+        if (mentioned.mentions) content.mentions = mentioned.mentions;
+        return content;
     }
-    if (mime.startsWith('video/')) {
-        return { video: buffer, caption, mimetype: mime };
+    if (mentioned.mentions) {
+        console.error('Mentions are only sent with text, photo, and video messages.');
     }
     if (mime.startsWith('audio/')) {
         return { audio: buffer, mimetype: mime, ptt: false };
@@ -519,12 +556,12 @@ function outgoingContent(text, media) {
     };
 }
 
-async function handleSendMessage(number, text, group_name, group_id, media) {
+async function handleSendMessage(number, text, group_name, group_id, media, mentions) {
     const chatId = await resolveChatId(number, group_name, group_id);
 
     if (chatId) {
         try {
-            await sock.sendMessage(chatId, outgoingContent(text, media));
+            await sock.sendMessage(chatId, outgoingContent(text, media, mentions));
             console.log(`Sent ${media ? 'media ' : ''}message to ${chatId}: ${text || '(no caption)'}`);
         } catch (sendErr) {
             console.error(`Failed to send message to ${chatId}:`, sendErr);
@@ -923,6 +960,8 @@ module.exports = {
     loadStoredPolls,
     pollMessages,
     phoneFromJid,
+    withMentions,
+    outgoingContent,
     setSocket(next) {
         sock = next;
     },

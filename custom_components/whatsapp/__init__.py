@@ -172,8 +172,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         media_path = call.data.get("media_path")
 
         media = await get_media_data(hass, media_url, media_path)
+        mentions = call.data.get("mentions")
 
-        await bridge.send_message(number, message, group, group_id, media)
+        await bridge.send_message(number, message, group, group_id, media, mentions)
 
     hass.services.async_register(DOMAIN, "send_message", handle_send_message)
 
