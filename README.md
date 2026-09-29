@@ -1,9 +1,9 @@
-> **Disclaimer from underlying library [whatsapp-web.js](https://wwebjs.dev/)**
-> This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or its affiliates. The official WhatsApp website can be found at [whatsapp](https://www.whatsapp.com). "WhatsApp" as well as related names, marks, emblems and images are registered trademarks of their respective owners. Also it is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe. For any businesses looking to integrate with WhatsApp for critical applications, we highly recommend using officially supported methods, such as Twilio's solution or other alternatives. You might also consider the [official API](https://developers.facebook.com/documentation/business-messaging/whatsapp/overview).
+> **Disclaimer**
+> This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or its affiliates. The official WhatsApp website can be found at [whatsapp.com](https://www.whatsapp.com). "WhatsApp" as well as related names, marks, emblems and images are registered trademarks of their respective owners. Also it is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe. For any businesses looking to integrate with WhatsApp for critical applications, we highly recommend using officially supported methods, such as Twilio's solution or other alternatives. You might also consider the [official API](https://developers.facebook.com/documentation/business-messaging/whatsapp/overview).
 
 # Home Assistant WhatsApp Integration
 
-A custom integration to send and receive WhatsApp messages in Home Assistant naturally. It uses a local [whatsapp-web.js](https://wwebjs.dev/) bridge running in Docker.
+A custom integration to send and receive WhatsApp messages in Home Assistant naturally. It uses a local [Baileys](https://github.com/WhiskeySockets/Baileys) bridge running in Docker, without Chromium.
 
 ## Features
 - **Send Messages**: Use the `whatsapp.send_message` service in HA.
@@ -296,12 +296,12 @@ action:
       message: "New channel update received!"
 ```
 
-For more stable automations, use `from_group_id` with the channel's numeric ID (without `@g.us`). The ID remains the same even if the channel is renamed:
+For more stable automations, use `from_group_id` with the channel's numeric ID. Channel events use a `@newsletter` id. A bare number still matches, with or without `@g.us` or `@newsletter`. The ID remains the same even if the channel is renamed:
 
 ```yaml
 trigger:
   - platform: whatsapp
-    from_group_id: "120363428200052636" # Channel ID (use get_groups or check bridge logs)
+    from_group_id: "120363428200052636" # Channel ID from the bridge logs
     contains_text: "update" # Optional
 action:
   - service: notify.persistent_notification
@@ -318,7 +318,7 @@ action:
 2.  Click the **dots (top-right) > Repositories**.
 3.  Add this repository URL: `https://github.com/raulpetruta/ha-wa-bridge`
 4.  Reload the store and install **WhatsApp Bridge**.
-5.  Start the Add-on.
+5.  Start the Add-on. Accounts linked before v2.4.0 need to scan the QR code again. The bridge no longer keeps a browser session. Logging out of the linked device clears the saved session and waits for you to restart the add-on before it shows a new QR code.
 
 #### Option B: Docker (For Container/Core users)
 This project requires a small bridge service. Create a `docker-compose.yaml` file with the following content:
@@ -333,11 +333,7 @@ services:
       - "3000:3000"
     volumes:
       - ${CONFIG_DIR}/ha-wa-bridge/.wa_auth:/usr/src/app/.wwebjs_auth
-      - ${CONFIG_DIR}/ha-wa-bridge/.wa_cache:/usr/src/app/.wwebjs_cache
     environment:
-      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
       # Forward messages you send yourself (groups only)
       - DETECT_OWN_MESSAGES=false
 
@@ -457,7 +453,7 @@ All options are also available as environment variables:
 6.  **Scan the QR Code** with your WhatsApp mobile app (Linked Devices).
 
 ## Credits 
-Powered by [whatsapp-web.js](https://wwebjs.dev/).
+Powered by [Baileys](https://github.com/WhiskeySockets/Baileys).
 
 ## Support the project
 - [Buy Me a Coffee](https://buymeacoffee.com/raulpetruta)

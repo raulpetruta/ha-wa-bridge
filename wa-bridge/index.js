@@ -1,9 +1,9 @@
-const { Client, LocalAuth, MessageMedia, Poll, ScheduledEvent } = require('whatsapp-web.js');
 const { WebSocketServer } = require('ws');
 const qrcode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const pino = require('pino');
 
 let configOptions = {};
 try {
@@ -48,6 +48,9 @@ const incomingLogLevel = (configOptions.incoming_message_log_level || process.en
 const mediaDownloadPath = String(configOptions.media_download_path || process.env.MEDIA_DOWNLOAD_PATH || '').trim();
 const mediaDownloadRoot = mediaDownloadPath ? path.resolve(mediaDownloadPath) : '';
 
+const dataPath = process.env.WA_DATA_PATH || './.wwebjs_auth';
+const authPath = path.join(dataPath, 'baileys_auth');
+
 const MEDIA_EXTENSIONS = {
     'image/jpeg': '.jpg',
     'image/jpg': '.jpg',
@@ -60,6 +63,29 @@ const MEDIA_EXTENSIONS = {
     'audio/mp4': '.m4a',
     'application/pdf': '.pdf',
 };
+
+const logger = pino({ level: 'silent' });
+
+let makeWASocket;
+let useMultiFileAuthState;
+let DisconnectReason;
+let downloadMediaMessage;
+let getAggregateVotesInPollMessage;
+let generateWAMessageFromContent;
+let Browsers;
+let isLidUser;
+
+let sock = null;
+let starting = false;
+let lastQr = null;
+let isReady = false;
+const groupsByJid = new Map();
+const groupsByName = new Map();
+const pollMessages = new Map();
+const pollVoteState = new Map();
+const pollStorePath = path.join(authPath, 'polls.json');
+const MAX_STORED_POLLS = 200;
+const NOT_READY_ERROR = 'Bridge is not connected to WhatsApp.';
 
 console.log(`Incoming messages mode: ${incomingMode}`);
 console.log(`Incoming message log level: ${incomingLogLevel}`);
@@ -94,12 +120,7 @@ function buildMediaFilename(media) {
     return stem ? `${stamp}-${suffix}-${stem}${ext}` : `${stamp}-${suffix}${ext}`;
 }
 
-async function saveIncomingMedia(msg) {
-    const media = await msg.downloadMedia();
-    if (!media || !media.data) {
-        return null;
-    }
-
+async function saveIncomingBuffer(buffer, media) {
     const filename = buildMediaFilename(media);
     const target = path.resolve(mediaDownloadRoot, filename);
     if (target !== mediaDownloadRoot && !target.startsWith(`${mediaDownloadRoot}${path.sep}`)) {
@@ -107,7 +128,7 @@ async function saveIncomingMedia(msg) {
     }
 
     await fs.promises.mkdir(mediaDownloadRoot, { recursive: true });
-    await fs.promises.writeFile(target, Buffer.from(media.data, 'base64'));
+    await fs.promises.writeFile(target, buffer);
     console.log(`Saved incoming media to ${target}`);
     return {
         path: target,
@@ -116,7 +137,6 @@ async function saveIncomingMedia(msg) {
     };
 }
 
-// Helper to log incoming data based on log level
 function logIncomingData(type, data, rawObj) {
     if (incomingLogLevel === 'NONE') return;
 
@@ -125,51 +145,271 @@ function logIncomingData(type, data, rawObj) {
         const group = data.isGroup ? ` (Group: ${data.chatName})` : (data.group_id ? ` (Group ID: ${data.group_id})` : '');
         console.log(`[${type}] received from ${sender}${group}`);
     } else {
-        // FULL logging
         console.log(`[${type}] RECEIVED`, rawObj);
     }
 }
 
+function toLegacyJid(jid) {
+    if (!jid) return jid;
+    const value = String(jid);
+    const at = value.lastIndexOf('@');
+    if (at === -1) return value;
+    let user = value.slice(0, at);
+    const domain = value.slice(at + 1);
+    if (domain !== 's.whatsapp.net' && domain !== 'c.us') return value;
+    if (user.includes(':')) user = user.split(':')[0];
+    return `${user}@c.us`;
+}
+
+function isLidJid(jid) {
+    if (typeof isLidUser === 'function') return isLidUser(String(jid));
+    return String(jid || '').endsWith('@lid');
+}
+
+function isGroupChat(jid) {
+    const value = String(jid || '');
+    return value.endsWith('@g.us') || value.endsWith('@newsletter');
+}
+
+function isLoggedOut(statusCode) {
+    const loggedOut = DisconnectReason?.loggedOut ?? 401;
+    return statusCode === loggedOut;
+}
+
+async function toPhoneJid(jid) {
+    if (!jid) return '';
+    let value = String(jid);
+    if (isLidJid(value)) {
+        const store = sock?.signalRepository?.lidMapping;
+        try {
+            const pn = store ? await store.getPNForLID(value) : null;
+            if (pn) value = pn;
+            else console.error(`No phone number is known yet for ${value}.`);
+        } catch (err) {
+            console.error(`Error mapping ${value} to a phone number:`, err);
+        }
+    }
+    return toLegacyJid(value);
+}
+
+async function senderPhoneJid(key, isGroup) {
+    const alt = isGroup ? key?.participantAlt : key?.remoteJidAlt;
+    const primary = isGroup ? (key?.participant || key?.remoteJid) : key?.remoteJid;
+    if (alt && !isLidJid(alt)) return toLegacyJid(alt);
+    return toPhoneJid(primary || alt);
+}
+
+function phoneFromJid(jid) {
+    if (!jid) return '';
+    let value = String(jid).split('@')[0];
+    if (value.includes(':')) {
+        value = value.split(':')[0];
+    }
+    return value;
+}
+
+function toGroupJid(id) {
+    const raw = String(id);
+    if (raw.endsWith('@g.us') || raw.endsWith('@newsletter')) return raw;
+    return `${raw}@g.us`;
+}
+
+function toSendJid(chatId) {
+    if (!chatId) return chatId;
+    if (String(chatId).endsWith('@c.us')) {
+        return String(chatId).replace(/@c\.us$/, '@s.whatsapp.net');
+    }
+    if (String(chatId).includes('@')) {
+        return String(chatId);
+    }
+    return `${chatId}@s.whatsapp.net`;
+}
+
+function unwrapMessage(message) {
+    if (!message) return message;
+    if (message.ephemeralMessage?.message) return unwrapMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return unwrapMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return unwrapMessage(message.viewOnceMessageV2.message);
+    if (message.documentWithCaptionMessage?.message) return unwrapMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+function messageBody(message) {
+    const content = unwrapMessage(message);
+    if (!content) return '';
+    return content.conversation
+        || content.extendedTextMessage?.text
+        || content.imageMessage?.caption
+        || content.videoMessage?.caption
+        || content.documentMessage?.caption
+        || '';
+}
+
+function mediaInfo(message) {
+    const content = unwrapMessage(message);
+    if (!content) return null;
+    const inner = content.imageMessage || content.videoMessage || content.audioMessage || content.documentMessage || content.stickerMessage;
+    if (!inner) return null;
+    return {
+        mimetype: inner.mimetype || '',
+        filename: inner.fileName || inner.title || '',
+    };
+}
+
+function pollKey(key) {
+    if (!key?.remoteJid || !key?.id) return '';
+    return `${key.remoteJid}:${key.id}`;
+}
+
+function toStorable(value) {
+    if (value == null) return value;
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+        return { __b64: Buffer.from(value).toString('base64') };
+    }
+    if (Array.isArray(value)) return value.map(toStorable);
+    if (typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) out[key] = toStorable(item);
+        return out;
+    }
+    return value;
+}
+
+function fromStorable(value) {
+    if (value == null) return value;
+    if (typeof value === 'object' && !Array.isArray(value) && typeof value.__b64 === 'string' && Object.keys(value).length === 1) {
+        return Buffer.from(value.__b64, 'base64');
+    }
+    if (Array.isArray(value)) return value.map(fromStorable);
+    if (typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) out[key] = fromStorable(item);
+        return out;
+    }
+    return value;
+}
+
+function loadStoredPolls() {
+    try {
+        if (!fs.existsSync(pollStorePath)) return;
+        const stored = fromStorable(JSON.parse(fs.readFileSync(pollStorePath, 'utf8')));
+        if (!Array.isArray(stored)) return;
+        for (const item of stored) {
+            if (item?.id && item?.msg) pollMessages.set(item.id, item.msg);
+        }
+        if (pollMessages.size > 0) console.log(`Loaded ${pollMessages.size} stored polls.`);
+    } catch (err) {
+        console.error('Error loading stored polls:', err);
+    }
+}
+
+function saveStoredPolls() {
+    try {
+        const items = [...pollMessages.entries()]
+            .slice(-MAX_STORED_POLLS)
+            .map(([id, msg]) => ({ id, msg }));
+        fs.mkdirSync(path.dirname(pollStorePath), { recursive: true });
+        fs.writeFileSync(pollStorePath, JSON.stringify(toStorable(items)));
+    } catch (err) {
+        console.error('Error saving stored polls:', err);
+    }
+}
+
+function rememberPoll(msg) {
+    const content = unwrapMessage(msg?.message);
+    if (!content?.pollCreationMessage && !content?.pollCreationMessageV3) return;
+    const key = pollKey(msg.key);
+    if (!key) return;
+    pollMessages.set(key, { key: msg.key, message: msg.message });
+    while (pollMessages.size > MAX_STORED_POLLS) {
+        const oldest = pollMessages.keys().next().value;
+        pollMessages.delete(oldest);
+    }
+    saveStoredPolls();
+}
+
+function rememberGroup(group) {
+    if (!group?.id) return;
+    groupsByJid.set(group.id, group);
+    if (group.subject) {
+        groupsByName.set(group.subject.toLowerCase(), group);
+    }
+}
+
+async function refreshGroups() {
+    const groups = await sock.groupFetchAllParticipating();
+    groupsByJid.clear();
+    groupsByName.clear();
+    for (const group of Object.values(groups)) {
+        rememberGroup(group);
+    }
+    return groups;
+}
+
+async function groupName(jid) {
+    const cached = groupsByJid.get(jid);
+    if (cached?.subject) return cached.subject;
+    try {
+        const meta = await sock.groupMetadata(jid);
+        rememberGroup(meta);
+        return meta.subject || '';
+    } catch (err) {
+        console.error(`Error fetching group ${jid}:`, err);
+        return '';
+    }
+}
+
+async function chatDisplayName(jid) {
+    if (String(jid).endsWith('@newsletter')) {
+        const cached = groupsByJid.get(jid);
+        if (cached?.subject) return cached.subject;
+        try {
+            const meta = await sock.newsletterMetadata('jid', jid);
+            if (meta?.name) {
+                rememberGroup({ id: jid, subject: meta.name });
+                return meta.name;
+            }
+        } catch (err) {
+            console.error(`Error fetching channel ${jid}:`, err);
+        }
+        return '';
+    }
+    return groupName(jid);
+}
+
 const PORT = 3000;
 
-// Initialize WebSocket Server
-const wss = new WebSocketServer({ port: PORT });
+let wss = null;
 
-console.log(`WebSocket server started on port ${PORT}`);
+function broadcast(data) {
+    if (!wss) return;
+    wss.clients.forEach(client => {
+        if (client.readyState === 1) {
+            client.send(JSON.stringify(data));
+        }
+    });
+}
 
-// Initialize WhatsApp Client
-const client = new Client({
-    authStrategy: new LocalAuth({
-        dataPath: process.env.WA_DATA_PATH || './.wwebjs_auth'
-    }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote', 
-            '--disable-gpu',
-            '--disable-extensions',
-            '--disable-software-rasterizer',
-            '--disable-web-security',
-            '--ignore-certificate-errors'
-        ],
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
-    },
-    authTimeoutMs: 0 // Wait indefinitely for QR scan
-});
+function replyNotReady(ws, data) {
+    console.error(NOT_READY_ERROR);
+    if (data.type === 'get_groups') {
+        ws.send(JSON.stringify({ type: 'get_groups_response', data: [], error: NOT_READY_ERROR }));
+    } else if (data.type === 'set_group_subject') {
+        ws.send(JSON.stringify({ type: 'set_group_subject_response', success: false, error: NOT_READY_ERROR }));
+    } else if (data.type === 'set_group_picture') {
+        ws.send(JSON.stringify({ type: 'set_group_picture_response', success: false, error: NOT_READY_ERROR }));
+    }
+}
 
-let lastQr = null;
-let isReady = false;
+function attachServer() {
+    wss = new WebSocketServer({ port: PORT });
+    wss.on('listening', () => {
+        console.log(`WebSocket server started on port ${PORT}`);
+    });
 
-// WebSocket Connection Handler
 wss.on('connection', (ws) => {
     console.log('New client connected');
 
-    // Send current state to new client
     if (isReady) {
         ws.send(JSON.stringify({ type: 'status', status: 'ready' }));
     } else if (lastQr) {
@@ -178,11 +418,15 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'status', status: 'initializing' }));
     }
 
-    // Handle incoming messages from HA
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
             console.log('Received command:', data);
+
+            if (!sock || !isReady) {
+                replyNotReady(ws, data);
+                return;
+            }
 
             if (data.type === 'send_message') {
                 const { number, message: text, group_name, group_id, media } = data;
@@ -193,10 +437,10 @@ wss.on('connection', (ws) => {
             } else if (data.type === 'broadcast') {
                 const { targets, message: text, media } = data;
                 if (Array.isArray(targets) && targets.length > 0) {
-                   console.log(`Broadcasting message to ${targets.length} targets.`);
-                   for (const target of targets) {
-                       await handleSendMessage(target, text, target, null, media);
-                   }
+                    console.log(`Broadcasting message to ${targets.length} targets.`);
+                    for (const target of targets) {
+                        await handleSendMessage(target, text, target, null, media);
+                    }
                 } else {
                     console.error('No targets provided for broadcast.');
                 }
@@ -217,42 +461,62 @@ wss.on('connection', (ws) => {
         }
     });
 });
+}
 
 async function resolveChatId(number, group_name, group_id) {
-    let chatId = number;
-
-    // If a group_id is provided, use it directly (most stable identifier)
     if (group_id) {
-        chatId = group_id;
-        if (!chatId.includes('@')) {
-            chatId = `${chatId}@g.us`;
-        }
+        const chatId = toGroupJid(group_id);
         console.log(`Using group ID directly: ${chatId}`);
         return chatId;
     }
 
     if (group_name) {
-        // optimistically try to find a group first if group_name is provided
         try {
-            const chats = await client.getChats();
-            const group = chats.find(chat => chat.isGroup && chat.name.toLowerCase() === group_name.toLowerCase());
-
+            let group = groupsByName.get(String(group_name).toLowerCase());
+            if (!group) {
+                await refreshGroups();
+                group = groupsByName.get(String(group_name).toLowerCase());
+            }
             if (group) {
-                chatId = group.id._serialized;
-                console.log(`Found group '${group.name}' with ID: ${chatId}`);
+                console.log(`Found group '${group.subject}' with ID: ${group.id}`);
+                return group.id;
             }
         } catch (err) {
             console.error('Error fetching chats:', err);
         }
     }
 
-    // Check if chatId is a valid JID (contains @)
-    if (chatId && !chatId.includes('@')) {
-         // Basic format check for number (e.g. 1234567890@c.us)
-        chatId = `${chatId}@c.us`;
+    if (number && !String(number).includes('@')) {
+        return toSendJid(number);
     }
 
-    return chatId;
+    return number ? toSendJid(number) : null;
+}
+
+function outgoingContent(text, media) {
+    if (!media) {
+        return { text: text || '' };
+    }
+
+    const buffer = Buffer.from(media.data, 'base64');
+    const mime = media.mimetype || 'application/octet-stream';
+    const caption = text || undefined;
+
+    if (mime.startsWith('image/')) {
+        return { image: buffer, caption, mimetype: mime };
+    }
+    if (mime.startsWith('video/')) {
+        return { video: buffer, caption, mimetype: mime };
+    }
+    if (mime.startsWith('audio/')) {
+        return { audio: buffer, mimetype: mime, ptt: false };
+    }
+    return {
+        document: buffer,
+        mimetype: mime,
+        fileName: media.filename || 'file',
+        caption,
+    };
 }
 
 async function handleSendMessage(number, text, group_name, group_id, media) {
@@ -260,19 +524,13 @@ async function handleSendMessage(number, text, group_name, group_id, media) {
 
     if (chatId) {
         try {
-            if (media) {
-                const messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
-                await client.sendMessage(chatId, messageMedia, { caption: text });
-                console.log(`Sent media message to ${chatId}: ${text || '(no caption)'}`);
-            } else {
-                await client.sendMessage(chatId, text);
-                console.log(`Sent message to ${chatId}: ${text}`);
-            }
+            await sock.sendMessage(chatId, outgoingContent(text, media));
+            console.log(`Sent ${media ? 'media ' : ''}message to ${chatId}: ${text || '(no caption)'}`);
         } catch (sendErr) {
             console.error(`Failed to send message to ${chatId}:`, sendErr);
         }
     } else {
-         console.error('No valid destination (number or group_name) provided.');
+        console.error('No valid destination (number or group_name) provided.');
     }
 }
 
@@ -281,51 +539,66 @@ async function handleSendPoll(number, group_name, group_id, pollQuestion, option
 
     if (chatId) {
         try {
-            const poll = new Poll(pollQuestion, options, { allowMultipleAnswers: allow_multiple_answers });
-            await client.sendMessage(chatId, poll);
+            const sent = await sock.sendMessage(chatId, {
+                poll: {
+                    name: pollQuestion,
+                    values: options,
+                    selectableCount: allow_multiple_answers ? 0 : 1,
+                },
+            });
+            if (sent) rememberPoll(sent);
             console.log(`Sent poll to ${chatId}: ${pollQuestion}`);
         } catch (sendErr) {
             console.error(`Failed to send poll to ${chatId}:`, sendErr);
         }
     } else {
-         console.error('No valid destination (number or group_name) provided for poll.');
+        console.error('No valid destination (number or group_name) provided for poll.');
     }
 }
 
 async function handleSendEvent(number, group_name, group_id, eventName, eventDescription, eventLocation, eventStartTime, eventEndTime, eventCallType) {
     const chatId = await resolveChatId(number, group_name, group_id);
 
-    if (chatId) {
-        try {
-            const options = {
-                callType: eventCallType || 'none'
-            };
-            if (eventDescription) options.description = eventDescription;
-            if (eventLocation) options.location = eventLocation;
-            if (eventEndTime) options.endTime = new Date(eventEndTime);
-
-            const event = new ScheduledEvent(eventName, new Date(eventStartTime), options);
-            await client.sendMessage(chatId, event);
-            console.log(`Sent event to ${chatId}: ${eventName}`);
-        } catch (sendErr) {
-            console.error(`Failed to send event to ${chatId}:`, sendErr);
-        }
-    } else {
+    if (!chatId) {
         console.error('No valid destination (number or group_name) provided for event.');
+        return;
+    }
+
+    try {
+        const eventMessage = {
+            name: eventName,
+            isCanceled: false,
+            isScheduleCall: eventCallType === 'video' || eventCallType === 'voice',
+            startTime: Math.floor(new Date(eventStartTime).getTime() / 1000),
+        };
+        if (eventDescription) eventMessage.description = eventDescription;
+        if (eventEndTime) eventMessage.endTime = Math.floor(new Date(eventEndTime).getTime() / 1000);
+        if (eventLocation) {
+            const location = String(eventLocation);
+            eventMessage.location = location.startsWith('http')
+                ? { name: location, url: location }
+                : { name: location };
+        }
+
+        const created = generateWAMessageFromContent(chatId, { eventMessage }, {
+            userJid: sock.user.id,
+        });
+        await sock.relayMessage(chatId, created.message, { messageId: created.key.id });
+        console.log(`Sent event to ${chatId}: ${eventName}`);
+    } catch (sendErr) {
+        console.error(`Failed to send event to ${chatId}:`, sendErr);
     }
 }
 
 async function handleGetGroups(ws) {
     try {
-        const chats = await client.getChats();
-        const groups = chats
-            .filter(chat => chat.isGroup)
-            .map(chat => ({
-                id: chat.id._serialized,
-                name: chat.name
-            }));
-        console.log(`Returning ${groups.length} groups.`);
-        ws.send(JSON.stringify({ type: 'get_groups_response', data: groups }));
+        const groups = await refreshGroups();
+        const data = Object.values(groups).map(group => ({
+            id: group.id,
+            name: group.subject,
+        }));
+        console.log(`Returning ${data.length} groups.`);
+        ws.send(JSON.stringify({ type: 'get_groups_response', data }));
     } catch (err) {
         console.error('Error fetching groups:', err);
         ws.send(JSON.stringify({ type: 'get_groups_response', data: [], error: err.message }));
@@ -339,21 +612,14 @@ async function handleSetGroupSubject(ws, group_id, subject) {
         return;
     }
 
-    let chatId = group_id;
-    if (!chatId.includes('@')) {
-        chatId = `${chatId}@g.us`;
-    }
+    const chatId = toGroupJid(group_id);
 
     try {
-        const chat = await client.getChatById(chatId);
-        if (!chat.isGroup) {
-            console.error(`Chat ${chatId} is not a group.`);
-            ws.send(JSON.stringify({ type: 'set_group_subject_response', success: false, error: 'Chat is not a group' }));
-            return;
-        }
-        const result = await chat.setSubject(subject);
-        console.log(`Set group subject for ${chatId} to "${subject}": ${result}`);
-        ws.send(JSON.stringify({ type: 'set_group_subject_response', success: result }));
+        await sock.groupUpdateSubject(chatId, subject);
+        const cached = groupsByJid.get(chatId);
+        if (cached) rememberGroup({ ...cached, subject });
+        console.log(`Set group subject for ${chatId} to "${subject}"`);
+        ws.send(JSON.stringify({ type: 'set_group_subject_response', success: true }));
     } catch (err) {
         console.error(`Failed to set group subject for ${chatId}:`, err);
         ws.send(JSON.stringify({ type: 'set_group_subject_response', success: false, error: err.message }));
@@ -367,244 +633,297 @@ async function handleSetGroupPicture(ws, group_id, media) {
         return;
     }
 
-    let chatId = group_id;
-    if (!chatId.includes('@')) {
-        chatId = `${chatId}@g.us`;
-    }
+    const chatId = toGroupJid(group_id);
 
     try {
-        const chat = await client.getChatById(chatId);
-        if (!chat.isGroup) {
-            console.error(`Chat ${chatId} is not a group.`);
-            ws.send(JSON.stringify({ type: 'set_group_picture_response', success: false, error: 'Chat is not a group' }));
-            return;
-        }
-        const messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
-        const result = await chat.setPicture(messageMedia);
-        console.log(`Set group picture for ${chatId}: ${result}`);
-        ws.send(JSON.stringify({ type: 'set_group_picture_response', success: result }));
+        const buffer = Buffer.from(media.data, 'base64');
+        await sock.updateProfilePicture(chatId, buffer);
+        console.log(`Set group picture for ${chatId}`);
+        ws.send(JSON.stringify({ type: 'set_group_picture_response', success: true }));
     } catch (err) {
         console.error(`Failed to set group picture for ${chatId}:`, err);
         ws.send(JSON.stringify({ type: 'set_group_picture_response', success: false, error: err.message }));
     }
 }
 
-// Broadcast helper
-function broadcast(data) {
-    wss.clients.forEach(client => {
-        if (client.readyState === 1) { // OPEN
-            client.send(JSON.stringify(data));
-        }
-    });
+function passesIncomingFilters({ isGroup, chatName, senderJid }) {
+    if (incomingMode === 'groups_only' && !isGroup) return false;
+
+    if (incomingMode === 'numbers_only') {
+        if (isGroup || !allowedNumbersSet.has(senderJid)) return false;
+    }
+
+    if (allowedGroupsLower.length > 0) {
+        if (!isGroup || !allowedGroupsLower.includes((chatName || '').toLowerCase())) return false;
+    }
+
+    if (allowedNumbersSet.size > 0 && incomingMode !== 'numbers_only') {
+        if (isGroup || !allowedNumbersSet.has(senderJid)) return false;
+    }
+
+    return true;
 }
 
-// WhatsApp Client Events
-client.on('qr', (qr) => {
-    console.log('QR Code received');
-    lastQr = qr;
-    // Generate terminal QR for local debugging logs
-    qrcode.toString(qr, { type: 'terminal', small: true }, function (err, url) {
-        if (!err) console.log(url);
-    });
-    
-    broadcast({ type: 'qr', data: qr });
-});
+async function handleIncomingMessage(msg) {
+    if (!msg.message || !msg.key) return;
+    rememberPoll(msg);
 
-client.on('ready', () => {
-    console.log('WhatsApp Client is ready!');
-    isReady = true;
-    lastQr = null;
-    broadcast({ type: 'status', status: 'ready' });
-});
+    if (msg.key.fromMe && !detectOwnMessages) return;
+    if (msg.key.remoteJid === 'status@broadcast') return;
 
-client.on('authenticated', () => {
-    console.log('Authenticated');
-    broadcast({ type: 'status', status: 'authenticated' });
-});
-
-client.on('auth_failure', msg => {
-    console.error('AUTHENTICATION FAILURE', msg);
-    broadcast({ type: 'status', status: 'auth_failure' });
-});
-
-client.on('vote_update', async vote => {
-
-    let parentMsgId = null;
-    let groupId = null;
-    let voter = vote.voter;
-    let isGroup = false;
+    const remoteJid = msg.key.remoteJid;
+    const isGroup = isGroupChat(remoteJid);
+    let senderJid = await senderPhoneJid(msg.key, isGroup);
+    if (String(senderJid).endsWith('@lid')) {
+        if (!isGroup) {
+            console.error(`Dropping direct message from ${senderJid} until a phone number is known.`);
+            return;
+        }
+        console.error(`Group message from ${senderJid} has no phone number yet.`);
+        senderJid = '';
+    }
     let chatName = '';
-    
-    // Extract purely the phone number from the JID format
-    if (voter && typeof voter === 'string') {
-        voter = voter.split('@')[0];
-        if (voter.includes(':')) {
-            voter = voter.split(':')[0];
-        }
-    }
-    
-    if (vote.parentMessage) {
-        if (vote.parentMessage.id && vote.parentMessage.id._serialized) {
-            parentMsgId = vote.parentMessage.id._serialized;
-        }
-        
-        let to = vote.parentMessage.to;
-        if (to) {
-            isGroup = to.includes('@g.us');
-            if (isGroup) {
-               groupId = to.split('@')[0];
-            }
-        }
-        
-        // We need the chat name for group filtering
-        try {
-            const chat = await client.getChatById(to || vote.parentMessage.id.remote);
-            chatName = chat.name;
-            isGroup = chat.isGroup;
-        } catch (err) {
-            console.error('Error fetching chat info for poll vote:', err);
-        }
-    }
-    
-    // groups_only mode: skip non-group votes
-    if (incomingMode === 'groups_only' && !isGroup) {
-        return;
+
+    if (isGroup) {
+        chatName = await chatDisplayName(remoteJid);
     }
 
-    // numbers_only mode: skip group votes and votes not from allowed numbers
-    if (incomingMode === 'numbers_only') {
-        if (isGroup || !allowedNumbersSet.has(`${voter}@c.us`)) {
-            return;
-        }
-    }
+    if (!passesIncomingFilters({ isGroup, chatName, senderJid })) return;
 
-    // allowed_groups filter: skip votes from groups not in the list
-    if (allowedGroupsLower.length > 0) {
-        if (!isGroup || !allowedGroupsLower.includes((chatName || '').toLowerCase())) {
-            return;
-        }
-    }
-
-    // allowed_numbers filter: skip votes from numbers not in the list
-    if (allowedNumbersSet.size > 0 && incomingMode !== 'numbers_only') {
-        if (isGroup || !allowedNumbersSet.has(`${voter}@c.us`)) {
-            return;
-        }
-    }
-
+    const info = mediaInfo(msg.message);
+    const content = unwrapMessage(msg.message);
     const payloadData = {
-        voter: voter,
-        group_id: groupId,
-        selectedOptions: vote.selectedOptions,
-        pollCreationMessageId: parentMsgId,
-        timestamp: vote.timestamp
+        from: isGroup ? remoteJid : senderJid,
+        to: isGroup ? remoteJid : await toPhoneJid(sock.user?.id),
+        body: messageBody(msg.message),
+        timestamp: Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000),
+        hasMedia: Boolean(info),
+        author: isGroup ? senderJid : null,
+        deviceType: null,
+        isForwarded: Boolean(content?.extendedTextMessage?.contextInfo?.isForwarded
+            || content?.imageMessage?.contextInfo?.isForwarded
+            || content?.videoMessage?.contextInfo?.isForwarded),
+        fromMe: Boolean(msg.key.fromMe),
+        chatName,
+        isGroup,
+        groupId: isGroup ? remoteJid : null,
     };
 
-    logIncomingData('VOTE_UPDATE', payloadData, vote);
+    if (info && mediaDownloadRoot) {
+        try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+                logger,
+                reuploadRequest: sock.updateMediaMessage,
+            });
+            const saved = await saveIncomingBuffer(buffer, info);
+            payloadData.mediaPath = saved.path;
+            payloadData.mediaFilename = saved.filename;
+            payloadData.mediaMimetype = saved.mimetype;
+        } catch (err) {
+            console.error('Error saving incoming media:', err);
+        }
+    }
 
-    broadcast({
-        type: 'poll_vote',
-        data: payloadData
-    });
-});
+    logIncomingData('MESSAGE', payloadData, msg);
+    broadcast({ type: 'message', data: payloadData });
+}
 
-if (incomingMode !== 'disabled') {
-    client.on('message_create', async msg => {
-        // If detect_own_messages is false, ignore messages sent by the bot itself
-        if (msg.fromMe && !detectOwnMessages) {
+async function emitPollVotes(key, votes) {
+    const id = pollKey(key);
+    const previous = pollVoteState.get(id) || new Map();
+    const next = new Map();
+    const isGroup = isGroupChat(key.remoteJid);
+    const chatName = isGroup ? await chatDisplayName(key.remoteJid) : '';
+
+    for (const option of votes) {
+        for (const voterJid of option.voters) {
+            const legacy = await toPhoneJid(voterJid);
+            if (String(legacy).endsWith('@lid')) {
+                console.error(`Skipping poll vote from ${voterJid} until a phone number is known.`);
+                continue;
+            }
+            const selected = next.get(legacy) || [];
+            selected.push({ name: option.name });
+            next.set(legacy, selected);
+        }
+    }
+
+    for (const [voterJid, selectedOptions] of next) {
+        const before = JSON.stringify(previous.get(voterJid) || []);
+        if (before === JSON.stringify(selectedOptions)) continue;
+
+        const voter = phoneFromJid(voterJid);
+        if (!passesIncomingFilters({ isGroup, chatName, senderJid: `${voter}@c.us` })) continue;
+
+        const payloadData = {
+            voter,
+            group_id: isGroup ? phoneFromJid(key.remoteJid) : null,
+            selectedOptions,
+            pollCreationMessageId: key.id,
+            timestamp: Math.floor(Date.now() / 1000),
+        };
+        logIncomingData('VOTE_UPDATE', payloadData, { key, selectedOptions });
+        broadcast({ type: 'poll_vote', data: payloadData });
+    }
+
+    pollVoteState.set(id, next);
+}
+
+async function handleConnectionUpdate(update) {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+        console.log('QR Code received');
+        lastQr = qr;
+        isReady = false;
+        qrcode.toString(qr, { type: 'terminal', small: true }, (err, url) => {
+            if (!err) console.log(url);
+        });
+        broadcast({ type: 'qr', data: qr });
+    }
+
+    if (connection === 'open') {
+        console.log('WhatsApp Client is ready!');
+        isReady = true;
+        lastQr = null;
+        broadcast({ type: 'status', status: 'authenticated' });
+        broadcast({ type: 'status', status: 'ready' });
+        try {
+            await refreshGroups();
+        } catch (err) {
+            console.error('Error fetching groups after connect:', err);
+        }
+    }
+
+    if (connection === 'close') {
+        isReady = false;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const loggedOut = isLoggedOut(statusCode);
+        console.error('WhatsApp connection closed', statusCode || lastDisconnect?.error || '');
+
+        if (loggedOut) {
+            broadcast({ type: 'status', status: 'auth_failure' });
+            try {
+                await fs.promises.rm(authPath, { recursive: true, force: true });
+            } catch (err) {
+                console.error('Error clearing WhatsApp session:', err);
+            }
+            console.error('WhatsApp logged out. Restart the add-on to scan a new QR code.');
             return;
         }
 
-        let chatInfo = {};
-        try {
-            const chat = await msg.getChat();
-            chatInfo = {
-                chatName: chat.name,
-                isGroup: chat.isGroup,
-                groupId: chat.isGroup ? chat.id._serialized : null
-            };
-
-            // groups_only mode: skip non-group messages
-            if (incomingMode === 'groups_only' && !chat.isGroup) {
-                return;
-            }
-
-            // numbers_only mode: skip group messages and messages not from allowed numbers
-            if (incomingMode === 'numbers_only') {
-                if (chat.isGroup || (!allowedNumbersSet.has(msg.from) && !allowedNumbersSet.has(msg.author))) {
-                    return;
-                }
-            }
-
-            // allowed_groups filter: skip messages from groups not in the list
-            if (allowedGroupsLower.length > 0) {
-                if (!chat.isGroup || !allowedGroupsLower.includes(chat.name.toLowerCase())) {
-                    return;
-                }
-            }
-
-            // allowed_numbers filter: skip messages from numbers not in the list
-            if (allowedNumbersSet.size > 0 && incomingMode !== 'numbers_only') {
-                if (chat.isGroup || (!allowedNumbersSet.has(msg.from) && !allowedNumbersSet.has(msg.author))) {
-                    return;
-                }
-            }
-        } catch (err) {
-            console.error('Error fetching chat info:', err);
-        }
-
-        const payloadData = {
-            from: msg.from,
-            to: msg.to,
-            body: msg.body,
-            timestamp: msg.timestamp,
-            hasMedia: msg.hasMedia,
-            author: msg.author,
-            deviceType: msg.deviceType,
-            isForwarded: msg.isForwarded,
-            fromMe: msg.fromMe,
-            ...chatInfo
-        };
-
-        if (msg.hasMedia && mediaDownloadRoot) {
-            try {
-                const saved = await saveIncomingMedia(msg);
-                if (saved) {
-                    payloadData.mediaPath = saved.path;
-                    payloadData.mediaFilename = saved.filename;
-                    payloadData.mediaMimetype = saved.mimetype;
-                }
-            } catch (err) {
-                console.error('Error saving incoming media:', err);
-            }
-        }
-
-        logIncomingData('MESSAGE', payloadData, msg);
-
-        // Broadcast incoming message to HA
-        broadcast({
-            type: 'message',
-            data: payloadData
-        });
-    });
-} else {
-    console.log('Incoming message handling is DISABLED. The bridge will not forward any received messages to Home Assistant.');
+        setTimeout(() => {
+            startSocket().catch((err) => {
+                console.error('Failed to reconnect:', err);
+                process.exit(1);
+            });
+        }, 3000);
+    }
 }
 
-// Start the client with retry logic
-const startClient = async () => {
+async function startSocket() {
+    if (starting) return;
+    starting = true;
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(authPath);
+        const socket = makeWASocket({
+            auth: state,
+            logger,
+            printQRInTerminal: false,
+            browser: Browsers.ubuntu('Chrome'),
+            syncFullHistory: false,
+            markOnlineOnConnect: false,
+            generateHighQualityLinkPreview: false,
+        });
+        sock = socket;
+        socket.ev.on('creds.update', saveCreds);
+        socket.ev.on('connection.update', (update) => {
+            handleConnectionUpdate(update).catch((err) => {
+                console.error('Error handling connection update:', err);
+            });
+        });
+
+        if (incomingMode !== 'disabled') {
+            socket.ev.on('messages.upsert', async ({ messages, type }) => {
+                if (type !== 'notify') return;
+                for (const msg of messages) {
+                    try {
+                        await handleIncomingMessage(msg);
+                    } catch (err) {
+                        console.error('Error handling incoming message:', err);
+                    }
+                }
+            });
+            socket.ev.on('messages.update', async (updates) => {
+                for (const { key, update } of updates) {
+                    if (!update?.pollUpdates || !key) continue;
+                    const stored = pollMessages.get(pollKey(key));
+                    if (!stored) {
+                        console.error('Poll vote received for an unknown poll.');
+                        continue;
+                    }
+                    try {
+                        const votes = getAggregateVotesInPollMessage({
+                            message: stored.message,
+                            pollUpdates: update.pollUpdates,
+                        }, socket.user?.id);
+                        await emitPollVotes(key, votes);
+                    } catch (err) {
+                        console.error('Error handling poll vote:', err);
+                    }
+                }
+            });
+        }
+    } finally {
+        starting = false;
+    }
+}
+
+async function startClient() {
     console.log('Initializing WhatsApp client...');
     try {
-        // Small delay to ensure network is stable
+        const baileys = await import('@whiskeysockets/baileys');
+        makeWASocket = baileys.default;
+        ({
+            useMultiFileAuthState,
+            DisconnectReason,
+            downloadMediaMessage,
+            getAggregateVotesInPollMessage,
+            generateWAMessageFromContent,
+            Browsers,
+            isLidUser,
+        } = baileys);
+        loadStoredPolls();
         await new Promise(resolve => setTimeout(resolve, 2000));
-        await client.initialize();
+        await startSocket();
     } catch (err) {
         console.error('Failed to initialize client:', err);
-        
-        // Exit to allow Docker/Supervisor to restart the container
         console.log('Exiting to trigger restart and lock cleanup...');
         process.exit(1);
     }
-};
+}
 
-startClient();
+if (incomingMode === 'disabled') {
+    console.log('Incoming message handling is DISABLED. The bridge will not forward any received messages to Home Assistant.');
+}
+
+if (require.main === module) {
+    attachServer();
+    startClient();
+}
+
+module.exports = {
+    toLegacyJid,
+    toPhoneJid,
+    toGroupJid,
+    isGroupChat,
+    isLoggedOut,
+    senderPhoneJid,
+    rememberPoll,
+    loadStoredPolls,
+    pollMessages,
+    phoneFromJid,
+    setSocket(next) {
+        sock = next;
+    },
+};

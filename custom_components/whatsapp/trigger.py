@@ -48,11 +48,11 @@ async def async_attach_trigger(
         # Home Assistant event, so derive them from "to".
         to = data.get("to", "")
 
-        if to and to.endswith("@g.us"):
+        if to and (to.endswith("@g.us") or to.endswith("@newsletter")):
             is_group = True
 
             # If groupId wasn't supplied by the bridge, derive it
-            # from the WhatsApp group JID.
+            # from the WhatsApp group or channel JID.
             if not group_id:
                 group_id = to
 
@@ -69,12 +69,12 @@ async def async_attach_trigger(
             if not group_id:
                 return
 
-            # Accept both:
+            # Accept a bare id, a group JID, or a channel JID:
             #   120363428656253626
-            # and
             #   120363428656253626@g.us
-            normalized_group_id = group_id.removesuffix("@g.us")
-            normalized_from_group_id = from_group_id.removesuffix("@g.us")
+            #   120363428656253626@newsletter
+            normalized_group_id = group_id.removesuffix("@g.us").removesuffix("@newsletter")
+            normalized_from_group_id = from_group_id.removesuffix("@g.us").removesuffix("@newsletter")
 
             if normalized_group_id != normalized_from_group_id:
                 return

@@ -9,11 +9,8 @@ services:
       - "3000:3000"
     volumes:
       - ./wa-bridge/.wwebjs_auth:/usr/src/app/.wwebjs_auth
-      - ./wa-bridge/.wwebjs_cache:/usr/src/app/.wwebjs_cache
       # - ./wa-media:/media/whatsapp # Mount the folder used by MEDIA_DOWNLOAD_PATH
     environment:
-      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       - DETECT_OWN_MESSAGES=true # Set to true to allow the bridge to detect and broadcast messages sent by your own authenticated WhatsApp account
       - INCOMING_MESSAGES_MODE=all # Set to 'all' to allow all messages, or 'numbers_only' to allow only messages from specific numbers, or 'groups_only' to allow only messages from specific groups
       - INCOMING_MESSAGE_LOG_LEVEL=FULL # FULL = log entire payload (default), COMPACT = sender & type only, NONE = no incoming message logs

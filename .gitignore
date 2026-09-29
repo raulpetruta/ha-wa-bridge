@@ -16,3 +16,6 @@ venv/
 # IDEs
 .idea/
 .vscode/
+
+# Local Docker Home Assistant config and sessions
+local/
