@@ -870,7 +870,7 @@ async function startSocket() {
             browser: Browsers.ubuntu('Chrome'),
             syncFullHistory: false,
             markOnlineOnConnect: false,
-            generateHighQualityLinkPreview: false,
+            generateHighQualityLinkPreview: true,
         });
         sock = socket;
         socket.ev.on('creds.update', saveCreds);
