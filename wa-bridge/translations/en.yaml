@@ -3,15 +3,16 @@ configuration:
     name: API Token
     description: >-
       Required. Shared secret that every WebSocket client must send before it can
-      control the bridge. Generate a long random value (for example with
-      "openssl rand -hex 32") and enter the same value in the integration's API
-      token field. The bridge refuses to start while this is empty. Never expose
-      the bridge port to the internet.
+      control the bridge. Use at least 16 characters; generate a long random value
+      with "openssl rand -hex 32" and enter the same value in the integration's
+      API token field. There is no default, so the add-on cannot start until this
+      is set. The bridge refuses to start without it. Never expose the bridge
+      port to the internet.
   detect_own_messages:
     name: Detect Own Messages (works in groups only)
     description: >-
       When enabled, messages sent from your own WhatsApp account (e.g. via WhatsApp Web
-      or your phone) triggers the sound notification.
+      or your phone) are forwarded to Home Assistant.
       Note: this only works inside group chats, not in 1-to-1 conversations.
   incoming_messages_mode:
     name: Incoming Messages Mode
@@ -29,14 +30,16 @@ configuration:
   allowed_groups:
     name: Allowed Groups
     description: >-
-      Optional. When set, only messages from group chats whose name exactly matches
-      one of these entries will be forwarded. Leave empty to apply no group filter.
+      Optional. When set, only messages from group chats whose name matches one of
+      these entries (case-insensitive) will be forwarded. Leave empty to apply no
+      group filter. Ignored in 'numbers_only' mode.
   allowed_numbers:
     name: Allowed Numbers
     description: >-
       Optional. Phone numbers in international format without '+' (e.g. 40741234567).
-      When set, only messages from these numbers are forwarded. Required for
-      'numbers_only' mode; also works as an extra filter in 'all' mode.
+      Required for 'numbers_only' mode, where only direct messages from these
+      numbers are forwarded. In 'all' mode it also filters messages by sender.
+      It is ignored in 'groups_only' mode. Leave empty to apply no number filter.
   media_download_path:
     name: Media Download Path
     description: >-
@@ -45,6 +48,7 @@ configuration:
       serve, for example /media/whatsapp. The add-on has read-write access to
       /media. Do NOT point this at /config/www (or anything below it): everything
       under /config/www is served unauthenticated at /local/, so received private
-      media would be readable by anyone who can reach your instance. The saved
+      media would be readable by anyone who can reach your instance. If you saved
+      media there with an older version, move or delete those files. The saved
       path is included on the message event as mediaPath. The same
       incoming-message filters apply.

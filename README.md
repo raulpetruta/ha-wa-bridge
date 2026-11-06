@@ -27,15 +27,17 @@ A custom integration to send and receive WhatsApp messages in Home Assistant nat
 
 The bridge can send WhatsApp messages as your linked account, read incoming messages, and change groups, so it must never be reachable without authentication.
 
-- **The API token is required.** The bridge refuses to start until a shared secret is configured. Set it as the add-on option `api_token` (or the `API_TOKEN` environment variable for Docker), then enter the same value in the integration's **API token** field. Generate a strong value with:
+- **The API token is required.** The bridge refuses to start until a shared secret is configured. Set it as the add-on option `api_token` (or the `API_TOKEN` environment variable for Docker), then enter the same value in the integration's **API token** field. Use at least 16 characters; generate a strong value with:
 
   ```bash
   openssl rand -hex 32
   ```
 
+- For Docker Compose, set `API_TOKEN` in your shell or in a `.env` file next to the compose file (`.env` is gitignored). The example fails closed and will not start while `API_TOKEN` is unset.
 - The integration authenticates with the WebSocket `Authorization: Bearer <token>` header. The bridge rejects unauthenticated connections with HTTP 401. The `?token=` query parameter exists as a fallback for manual testing only.
 - Never log or share the token. Do not expose port `3000` to the internet: keep the bridge on your local network (or reach it through a VPN) and restrict the port with your firewall or container network if possible.
-- **Received media must not live under `/config/www`.** Everything below `/config/www` is served **unauthenticated** at `/local/`. Point `media_download_path` at a location Home Assistant does not serve, such as `/media/whatsapp`.
+- If you change the token later, update it in Home Assistant when it prompts you to **Re-authenticate**; otherwise the saved token stops the client from reconnecting.
+- **Received media must not live under `/config/www`.** Everything below `/config/www` is served **unauthenticated** at `/local/`. Point `media_download_path` at a location Home Assistant does not serve, such as `/media/whatsapp`. If an older version saved media under `/config/www`, move or delete those files: they stay readable at their old `/local/` URLs until you do.
 
 ## Usage
 
@@ -372,7 +374,8 @@ services:
       - ${MEDIA_DIR}/whatsapp:/media/whatsapp
     environment:
       # REQUIRED: shared secret the integration must send. Generate: openssl rand -hex 32
-      - API_TOKEN=replace-with-a-long-random-token
+      # Compose refuses to start while API_TOKEN is unset (set it in your shell or .env).
+      - "API_TOKEN=${API_TOKEN:?set API_TOKEN to a long random secret (run openssl rand -hex 32)}"
 
       # Forward messages you send yourself (groups only)
       - DETECT_OWN_MESSAGES=false
@@ -401,7 +404,7 @@ services:
       # - ALLOWED_NUMBERS=40741234567,49123456789
 ```
 
-Before starting the container, replace `replace-with-a-long-random-token` with a real secret (`openssl rand -hex 32`) and keep it for the integration setup. `${CONFIG_DIR}` is your Home Assistant config folder and `${MEDIA_DIR}` is a folder for received media.
+Before starting the container, set `API_TOKEN` to a real secret (`export API_TOKEN=$(openssl rand -hex 32)`) or put it in a `.env` file next to the compose file (`.env` is gitignored). Compose refuses to start while it is unset. `${CONFIG_DIR}` is your Home Assistant config folder and `${MEDIA_DIR}` is a folder for received media.
 
 Then run:
 ```bash
@@ -437,12 +440,12 @@ The API token introduced in 3.1.0 is required as well — see **Upgrading from 3
 
 ### Upgrading from 3.0.x
 
-Version 3.1.0 makes the bridge API token mandatory and changes the recommended location for received media.
+Version 3.1.0 made the bridge API token mandatory and changed the recommended location for received media. Version 3.1.1 tightened the defaults: the add-on requires a token of at least 16 characters, only mounts `/media`, and Home Assistant prompts for reauthentication if the bridge later rejects the token.
 
-1. Generate a token: `openssl rand -hex 32`.
-2. Add the token to the bridge: Add-on users open the **Configuration** tab and set **API token**, then save and restart the add-on. Docker users add `API_TOKEN=<token>` to the container environment and restart it.
-3. Update the integration: Home Assistant shows a **Reauthenticate** prompt for the existing entry. Enter the same token (the bridge URL is pre-filled) and submit. If no prompt appears, remove and re-add the integration; saved notify targets are kept in the config entry options.
-4. If `media_download_path` points under `/config/www`, move it to `/media/whatsapp` (mount that folder for Docker) and restart the bridge. Files already saved stay where they are.
+1. Generate a token with at least 16 characters: `openssl rand -hex 32`.
+2. Add the token to the bridge: Add-on users open the **Configuration** tab and set **API token**, then save and restart the add-on. Docker users set `API_TOKEN=<token>` in the container environment and restart it.
+3. Update the integration: Home Assistant shows a **Reauthenticate** prompt for the existing entry. Enter the same token (the bridge URL is pre-filled) and submit. Reauthentication keeps your saved notify targets. If no prompt appears, reload the integration or restart Home Assistant. Removing and re-adding the integration also works, but it deletes the saved notify targets, so recreate them afterwards.
+4. If `media_download_path` points under `/config/www`, move the files to `/media/whatsapp` (mount that folder for Docker), remove the old folder, then update the option and restart the bridge. Do not leave private files under `/config/www`: they remain readable at `/local/` until they are moved or deleted. As of 3.1.1 the add-on only mounts `/media`, so it can no longer write to `/config`.
 5. If the bridge logs that it is refusing to start without an API token, the option is still empty — set it before starting the container.
 
 ## Configuration
@@ -450,7 +453,7 @@ Version 3.1.0 makes the bridge API token mandatory and changes the recommended l
 ### Add-on Configuration
 If you are using the Home Assistant Add-on, you can configure the following options in the add-on configuration tab:
 
-- **`api_token`**: **Required.** Shared secret that every WebSocket client must send before it can control the bridge. Generate a long random value with `openssl rand -hex 32`, paste it here, and enter the same value in the integration's **API token** field. The bridge refuses to start while this is empty. Keep the token private.
+- **`api_token`**: **Required.** Shared secret that every WebSocket client must send before it can control the bridge. It must be at least 16 characters; the add-on form has no default, so the add-on cannot start until it is filled in. Generate a long random value with `openssl rand -hex 32`, paste it here, and enter the same value in the integration's **API token** field. Keep the token private.
 
 - **`detect_own_messages`**: Set to `true` to forward messages sent by your own account (e.g., from WhatsApp Web or your phone). Works for group messages only. Default: `false`.
 
@@ -465,15 +468,15 @@ If you are using the Home Assistant Add-on, you can configure the following opti
   - `COMPACT` – logs only basic info like sender identification and message type ("Message received from X"). Message bodies and selected options are omitted.
   - `NONE` – disables all logging for incoming messages. This is the most private option.
 
-- **`allowed_groups`**: An optional list of group names. When set, **only** messages from groups whose name exactly matches one of the entries are forwarded. Useful if you only care about a single group. Example:
+- **`allowed_groups`**: An optional list of group names. When set, **only** messages from groups whose name matches one of the entries (case-insensitive) are forwarded. Useful if you only care about a single group. Example:
   ```yaml
   allowed_groups:
     - "Family Group"
     - "Work Team"
   ```
-  Leave empty (default) to apply no group-name filter.
+  Leave empty (default) to apply no group-name filter. Ignored in `numbers_only` mode.
 
-- **`allowed_numbers`**: An optional list of phone numbers (international format, no `+`). When set, **only** messages from those numbers are forwarded. Required when using `numbers_only` mode; also works as an extra filter in `all` mode. Example:
+- **`allowed_numbers`**: An optional list of phone numbers (international format, no `+`). Required when using `numbers_only` mode, where only direct messages from those numbers are forwarded. In `all` mode it also filters messages by sender. It is ignored in `groups_only` mode. Example:
   ```yaml
   allowed_numbers:
     - "40741234567"
@@ -481,11 +484,11 @@ If you are using the Home Assistant Add-on, you can configure the following opti
   ```
   Leave empty (default) to apply no number filter.
 
-- **`media_download_path`**: Optional directory for received photos, videos, and files. Leave empty to skip downloads. The add-on has read-write access to `/config` and `/media`; use `/media/whatsapp`, which Home Assistant does not serve over HTTP. Example:
+- **`media_download_path`**: Optional directory for received photos, videos, and files. Leave empty to skip downloads. The add-on has read-write access to `/media`; use `/media/whatsapp`, which Home Assistant does not serve over HTTP. Example:
   ```yaml
   media_download_path: /media/whatsapp
   ```
-  Do **not** point this at `/config/www` (or anything below it): everything under `/config/www` is served **unauthenticated** at `/local/`, so received private photos and files would be readable by anyone who can reach your instance. Files that pass the incoming-message filters are saved there. The message event includes `mediaPath`, `mediaFilename`, and `mediaMimetype`. Use `allowed_groups` if you only want one group's photos.
+  Do **not** point this at `/config/www` (or anything below it): everything under `/config/www` is served **unauthenticated** at `/local/`, so received private photos and files would be readable by anyone who can reach your instance. If an older version saved media there, move or delete those files first. Files that pass the incoming-message filters are saved to the configured folder. The message event includes `mediaPath`, `mediaFilename`, and `mediaMimetype`. Use `allowed_groups` if you only want one group's photos.
 
   ```yaml
   trigger:
@@ -498,12 +501,13 @@ If you are using the Home Assistant Add-on, you can configure the following opti
   ```
 
 ### Docker Compose Configuration
-All options are also available as environment variables:
+All options are also available as environment variables. Set `API_TOKEN` in your shell or in a gitignored `.env` file next to the compose file; the example fails closed if it is unset.
 ```yaml
     environment:
       # REQUIRED: shared secret the integration must send (openssl rand -hex 32)
-      - API_TOKEN=replace-with-a-long-random-token
-      - DETECT_OWN_MESSAGES=true
+      # Compose refuses to start while API_TOKEN is unset.
+      - "API_TOKEN=${API_TOKEN:?set API_TOKEN to a long random secret}"
+      - DETECT_OWN_MESSAGES=false
       # Options: all | disabled | groups_only | numbers_only
       - INCOMING_MESSAGES_MODE=disabled
       # Options: FULL | COMPACT | NONE

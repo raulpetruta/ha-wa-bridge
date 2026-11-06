@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+from collections.abc import Callable
+
 import aiohttp
 
 from homeassistant.core import HomeAssistant
@@ -9,10 +11,19 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 _LOGGER = logging.getLogger(__name__)
 
 class WhatsAppBridge:
-    def __init__(self, hass: HomeAssistant, host: str, token: str):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        host: str,
+        token: str,
+        on_auth_failed: Callable[[], None] | None = None,
+    ):
         self.hass = hass
-        self.host = host
-        self.token = token
+        self.host = host.strip()
+        # Trim like the bridge does, so a token pasted with surrounding
+        # whitespace still matches the configured secret.
+        self.token = token.strip()
+        self._on_auth_failed = on_auth_failed
         self._session = None
         self._ws = None
         self._running = False
@@ -52,8 +63,9 @@ class WhatsAppBridge:
                             break
             except aiohttp.WSServerHandshakeError as err:
                 if err.status in (401, 403):
-                    # Bad shared secret: retrying will never succeed. Stop and let
-                    # the config entry (re)authentication handle it.
+                    # Bad shared secret: retrying will never succeed. Stop and
+                    # ask Home Assistant to prompt for a fresh token (the
+                    # config entry's reauth flow preserves existing options).
                     self.connection_status = "auth_failed"
                     self._running = False
                     _LOGGER.error(
@@ -61,6 +73,13 @@ class WhatsAppBridge:
                         "Re-authenticate the integration with a valid token.",
                         err.status,
                     )
+                    if self._on_auth_failed is not None:
+                        try:
+                            self._on_auth_failed()
+                        except Exception:
+                            _LOGGER.exception(
+                                "Error starting reauthentication for the WhatsApp Bridge"
+                            )
                     return
                 _LOGGER.error("Error connecting to WhatsApp Bridge: %s", err)
                 self.connection_status = "error"

@@ -11,17 +11,29 @@ try {
         configOptions = JSON.parse(fs.readFileSync('/data/options.json', 'utf8'));
     }
 } catch (err) {
-    console.error('Error reading options.json:', err);
+    // Never log a JSON.parse() message: V8 embeds a slice of the input, and
+    // this file contains the API token.
+    console.error('Error reading options.json:', err instanceof SyntaxError ? 'invalid JSON (contents redacted)' : err);
 }
 
 const detectOwnMessages = configOptions.detect_own_messages || process.env.DETECT_OWN_MESSAGES === 'true' || false;
 
 // Shared secret required to authenticate WebSocket clients.
 // Add-on option api_token, or API_TOKEN for Docker Compose deployments.
-const apiToken = String(configOptions.api_token || process.env.API_TOKEN || '').trim();
+// The add-on option wins over the environment variable when both are set.
+const apiToken = String(configOptions.api_token || '').trim() || String(process.env.API_TOKEN || '').trim();
+
+if (apiToken) {
+    if (apiToken.length < 16) {
+        console.warn('Warning: API token is shorter than 16 characters. Use a long random secret, for example "openssl rand -hex 32".');
+    }
+    if (/[^\x20-\x7e]/.test(apiToken)) {
+        console.warn('Warning: API token contains non-ASCII characters. Use a hex token (openssl rand -hex 32) for the best client compatibility.');
+    }
+}
 
 // Incoming message filtering
-// Mode: 'all' (default) | 'disabled' | 'groups_only'
+// Mode: 'all' (default) | 'disabled' | 'groups_only' | 'numbers_only'
 const incomingMode = configOptions.incoming_messages_mode || process.env.INCOMING_MESSAGES_MODE || 'all';
 
 // Optional list of group names to forward (applies to groups_only mode and as a filter in 'all' mode).
@@ -443,6 +455,26 @@ function replyNotReady(ws, data) {
     }
 }
 
+const AUTH_WARNING_INTERVAL_MS = 10000;
+let lastAuthWarningAt = 0;
+let suppressedAuthWarnings = 0;
+
+function warnRejectedClient() {
+    // Unauthenticated probes are cheap for an attacker, so do not let them
+    // flood the add-on log one line per handshake.
+    const now = Date.now();
+    if (now - lastAuthWarningAt < AUTH_WARNING_INTERVAL_MS) {
+        suppressedAuthWarnings += 1;
+        return;
+    }
+    const suppressed = suppressedAuthWarnings > 0
+        ? ` (${suppressedAuthWarnings} more rejected since the previous log)`
+        : '';
+    console.warn(`Rejected WebSocket client: missing or invalid API token.${suppressed}`);
+    lastAuthWarningAt = now;
+    suppressedAuthWarnings = 0;
+}
+
 function attachServer() {
     wss = new WebSocketServer({
         port: PORT,
@@ -451,7 +483,7 @@ function attachServer() {
                 cb(true);
                 return;
             }
-            console.warn('Rejected WebSocket client: missing or invalid API token.');
+            warnRejectedClient();
             cb(false, 401, 'Unauthorized');
         },
     });
@@ -740,14 +772,18 @@ function passesIncomingFilters({ isGroup, chatName, senderJid }) {
     if (incomingMode === 'groups_only' && !isGroup) return false;
 
     if (incomingMode === 'numbers_only') {
-        if (isGroup || !allowedNumbersSet.has(senderJid)) return false;
+        // Direct messages only, and only from the allowed numbers.
+        return !isGroup && allowedNumbersSet.has(senderJid);
     }
 
     if (allowedGroupsLower.length > 0) {
         if (!isGroup || !allowedGroupsLower.includes((chatName || '').toLowerCase())) return false;
     }
 
-    if (allowedNumbersSet.size > 0 && incomingMode !== 'numbers_only') {
+    // In 'all' mode the number list is an extra sender filter. It is not
+    // applied to 'groups_only' mode: group message senders are participants,
+    // not direct contacts, so a number filter would drop every group message.
+    if (allowedNumbersSet.size > 0 && incomingMode === 'all') {
         if (isGroup || !allowedNumbersSet.has(senderJid)) return false;
     }
 
@@ -1022,6 +1058,7 @@ module.exports = {
     outgoingContent,
     requestToken,
     isAuthorizedRequest,
+    passesIncomingFilters,
     setSocket(next) {
         sock = next;
     },
