@@ -1,11 +1,11 @@
 {
   "name": "ha-wa-bridge",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test_filters.js && node test_mentions.js && node test_hardening.js && node test_auth.js"
   },
   "keywords": [],
   "author": "",

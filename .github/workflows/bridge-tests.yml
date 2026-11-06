@@ -1,0 +1,33 @@
+name: Bridge Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: wa-bridge
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: wa-bridge/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run bridge unit and live WebSocket auth tests
+        run: npm test

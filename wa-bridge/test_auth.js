@@ -73,6 +73,25 @@ function testIsAuthorizedRequest() {
 
     // The default expected token is the module-level apiToken, which is empty here.
     assert.strictEqual(bridge.isAuthorizedRequest({ headers: { authorization: `Bearer ${TOKEN}` } }), false);
+
+    // Near-miss tokens must be rejected. These catch prefix/startsWith-style
+    // comparison bugs that plain "definitely-wrong" tokens would not.
+    assert.strictEqual(
+        bridge.isAuthorizedRequest({ headers: { authorization: `Bearer ${TOKEN}-extra` }, url: '/' }, TOKEN),
+        false,
+    );
+    assert.strictEqual(
+        bridge.isAuthorizedRequest({ headers: { authorization: `Bearer ${TOKEN.slice(0, -1)}` }, url: '/' }, TOKEN),
+        false,
+    );
+    assert.strictEqual(
+        bridge.isAuthorizedRequest({ headers: { authorization: `Bearer ${TOKEN.toUpperCase()}` }, url: '/' }, TOKEN),
+        false,
+    );
+    assert.strictEqual(
+        bridge.isAuthorizedRequest({ headers: { authorization: `Bearer extra-${TOKEN}` }, url: '/' }, TOKEN),
+        false,
+    );
 }
 
 function waitForExit(child, timeoutMs) {
@@ -234,6 +253,18 @@ async function testLiveAuthentication() {
             headers: { Authorization: 'Bearer definitely-wrong' },
         });
         assert.strictEqual(wrongBearer.statusCode, 401);
+
+        // Near-miss tokens: an implementation that compares prefixes would
+        // accept these, so they must stay rejected.
+        const extendedBearer = await expectUnauthorized(`ws://127.0.0.1:${PORT}/`, {
+            headers: { Authorization: `Bearer ${TOKEN}-extra` },
+        });
+        assert.strictEqual(extendedBearer.statusCode, 401);
+
+        const truncatedBearer = await expectUnauthorized(`ws://127.0.0.1:${PORT}/`, {
+            headers: { Authorization: `Bearer ${TOKEN.slice(0, -1)}` },
+        });
+        assert.strictEqual(truncatedBearer.statusCode, 401);
 
         const wrongQuery = await expectUnauthorized(`ws://127.0.0.1:${PORT}/?token=definitely-wrong`);
         assert.strictEqual(wrongQuery.statusCode, 401);

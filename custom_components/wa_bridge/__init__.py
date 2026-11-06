@@ -96,7 +96,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up WhatsApp Integration from a config entry."""
-    token = entry.data.get(CONF_TOKEN)
+    # Trim like the bridge does and treat whitespace-only tokens as missing.
+    token = str(entry.data.get(CONF_TOKEN) or "").strip()
     if not token:
         # Triggers the reauth flow instead of failing silently.
         raise ConfigEntryAuthFailed(
@@ -105,9 +106,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})
 
-    host = entry.data.get(CONF_HOST, DEFAULT_HOST)
+    host = str(entry.data.get(CONF_HOST) or DEFAULT_HOST).strip()
 
-    bridge = WhatsAppBridge(hass, host, token)
+    def _async_start_reauth() -> None:
+        """Ask for a new API token after the bridge rejected the saved one."""
+        _LOGGER.warning("WhatsApp Bridge rejected the saved API token")
+        entry.async_start_reauth(hass)
+
+    bridge = WhatsAppBridge(hass, host, token, _async_start_reauth)
     hass.data[DOMAIN][entry.entry_id] = bridge
 
     async def bridge_event_callback(msg):

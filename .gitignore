@@ -19,3 +19,6 @@ venv/
 
 # Local Docker Home Assistant config and sessions
 local/
+
+# Local secrets (for example API_TOKEN for docker compose)
+.env

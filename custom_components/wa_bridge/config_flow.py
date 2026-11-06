@@ -40,6 +40,10 @@ async def _async_verify_connection(
     Returns a config flow error key, or None when the connection succeeded.
     The token is only ever sent in the Authorization header, never logged.
     """
+    host = host.strip()
+    token = token.strip()
+    if not token:
+        return "invalid_auth"
     try:
         session = async_get_clientsession(hass)
         async with asyncio.timeout(10):
@@ -47,8 +51,13 @@ async def _async_verify_connection(
                 host, headers={"Authorization": f"Bearer {token}"}
             ) as ws:
                 # The bridge always announces itself (status or QR) on connect.
+                # Log only the frame type: an unpaired bridge sends the QR
+                # login payload here, which must not end up in the log.
                 msg = await ws.receive_json()
-                _LOGGER.debug("Connection verification received: %s", msg)
+                _LOGGER.debug(
+                    "Connection verification received: %s",
+                    msg.get("type") if isinstance(msg, dict) else type(msg).__name__,
+                )
     except aiohttp.WSServerHandshakeError as err:
         if err.status in AUTH_FAILED_STATUSES:
             _LOGGER.warning("WhatsApp Bridge rejected the API token")
@@ -96,8 +105,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         errors = {}
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
-            self._token = user_input[CONF_TOKEN]
+            self._host = user_input[CONF_HOST].strip()
+            self._token = user_input[CONF_TOKEN].strip()
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
 
@@ -129,8 +138,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="reauth_failed")
 
         if user_input is not None:
-            host = user_input[CONF_HOST]
-            token = user_input[CONF_TOKEN]
+            host = user_input[CONF_HOST].strip()
+            token = user_input[CONF_TOKEN].strip()
             error = await _async_verify_connection(self.hass, host, token)
             if error:
                 errors["base"] = error

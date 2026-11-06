@@ -15,7 +15,7 @@
       },
       "reauth_confirm": {
         "title": "Re-authenticate with WhatsApp Bridge",
-        "description": "The bridge rejected the saved API token. Enter the current token to reconnect.",
+        "description": "Enter the API token configured for the bridge to reconnect. The token may have changed, or it may be missing.",
         "data": {
           "host": "Bridge WebSocket URL",
           "token": "API token"

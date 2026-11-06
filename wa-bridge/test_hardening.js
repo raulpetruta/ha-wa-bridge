@@ -119,6 +119,7 @@ function testNotReadyReplies() {
         });
 
         child.on('exit', (code, signal) => {
+            fs.rmSync(childData, { recursive: true, force: true });
             if (signal === 'SIGTERM' || code === 0 || code === null) return;
         });
         child.stderr.on('data', () => {});
