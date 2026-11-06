@@ -16,6 +16,10 @@ try {
 
 const detectOwnMessages = configOptions.detect_own_messages || process.env.DETECT_OWN_MESSAGES === 'true' || false;
 
+// Shared secret required to authenticate WebSocket clients.
+// Add-on option api_token, or API_TOKEN for Docker Compose deployments.
+const apiToken = String(configOptions.api_token || process.env.API_TOKEN || '').trim();
+
 // Incoming message filtering
 // Mode: 'all' (default) | 'disabled' | 'groups_only'
 const incomingMode = configOptions.incoming_messages_mode || process.env.INCOMING_MESSAGES_MODE || 'all';
@@ -379,6 +383,44 @@ async function chatDisplayName(jid) {
 
 const PORT = 3000;
 
+const BEARER_PATTERN = /^Bearer\s+(.+)$/i;
+
+function tokenDigest(value) {
+    return crypto.createHash('sha256').update(String(value)).digest();
+}
+
+function safeTokenEquals(a, b) {
+    // Hashing first keeps both buffers the same length, so timingSafeEqual
+    // works for tokens of any length and does not leak the length via a throw.
+    return crypto.timingSafeEqual(tokenDigest(a), tokenDigest(b));
+}
+
+function requestToken(req) {
+    const headers = req && req.headers ? req.headers : {};
+    const authorization = headers.authorization || headers.Authorization;
+    if (typeof authorization === 'string') {
+        const match = BEARER_PATTERN.exec(authorization.trim());
+        if (match) return match[1].trim();
+    }
+
+    const url = req && typeof req.url === 'string' ? req.url : '';
+    const queryIndex = url.indexOf('?');
+    if (queryIndex !== -1) {
+        const token = new URLSearchParams(url.slice(queryIndex + 1)).get('token');
+        if (token !== null) return String(token).trim();
+    }
+
+    return '';
+}
+
+function isAuthorizedRequest(req, expected = apiToken) {
+    const expectedToken = String(expected || '').trim();
+    if (!expectedToken) return false;
+    const providedToken = requestToken(req);
+    if (!providedToken) return false;
+    return safeTokenEquals(providedToken, expectedToken);
+}
+
 let wss = null;
 
 function broadcast(data) {
@@ -402,13 +444,24 @@ function replyNotReady(ws, data) {
 }
 
 function attachServer() {
-    wss = new WebSocketServer({ port: PORT });
+    wss = new WebSocketServer({
+        port: PORT,
+        verifyClient: (info, cb) => {
+            if (isAuthorizedRequest(info && info.req)) {
+                cb(true);
+                return;
+            }
+            console.warn('Rejected WebSocket client: missing or invalid API token.');
+            cb(false, 401, 'Unauthorized');
+        },
+    });
     wss.on('listening', () => {
         console.log(`WebSocket server started on port ${PORT}`);
+        console.log('WebSocket clients must authenticate with the API token.');
     });
 
 wss.on('connection', (ws) => {
-    console.log('New client connected');
+    console.log('New authenticated client connected');
 
     if (isReady) {
         ws.send(JSON.stringify({ type: 'status', status: 'ready' }));
@@ -945,6 +998,11 @@ if (incomingMode === 'disabled') {
 }
 
 if (require.main === module) {
+    if (!apiToken) {
+        console.error('FATAL: Refusing to start the WhatsApp bridge without WebSocket authentication.');
+        console.error('Set the add-on option "api_token" (or the API_TOKEN environment variable) to a shared secret.');
+        process.exit(1);
+    }
     attachServer();
     startClient();
 }
@@ -962,6 +1020,8 @@ module.exports = {
     phoneFromJid,
     withMentions,
     outgoingContent,
+    requestToken,
+    isAuthorizedRequest,
     setSocket(next) {
         sock = next;
     },

@@ -17,6 +17,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service import async_set_service_schema
@@ -28,6 +29,7 @@ from .const import (
     CONF_GROUP_ID,
     CONF_HOST,
     CONF_NUMBER,
+    CONF_TOKEN,
     DEFAULT_HOST,
     DOMAIN,
     EVENT_GROUPS_RECEIVED,
@@ -63,13 +65,49 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the WhatsApp Integration component."""
     return True
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate an old config entry to the current version."""
+    _LOGGER.debug(
+        "Migrating WhatsApp Bridge config entry %s from version %s",
+        entry.entry_id,
+        entry.version,
+    )
+
+    if entry.version > 2:
+        # Downgrades are not supported; keep the entry untouched so the user
+        # can fix the installation instead of losing their configuration.
+        _LOGGER.error(
+            "Config entry %s has version %s, which is newer than this integration supports",
+            entry.entry_id,
+            entry.version,
+        )
+        return False
+
+    if entry.version == 1:
+        # 3.0.0 entries only stored the host. Version 2 requires the shared
+        # secret; async_setup_entry raises ConfigEntryAuthFailed so the user is
+        # sent through reauth to supply the API token.
+        hass.config_entries.async_update_entry(entry, version=2)
+        _LOGGER.info(
+            "Migrated WhatsApp Bridge config entry %s to version 2", entry.entry_id
+        )
+
+    return True
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up WhatsApp Integration from a config entry."""
+    token = entry.data.get(CONF_TOKEN)
+    if not token:
+        # Triggers the reauth flow instead of failing silently.
+        raise ConfigEntryAuthFailed(
+            "The WhatsApp Bridge API token is missing; re-authentication is required"
+        )
+
     hass.data.setdefault(DOMAIN, {})
 
     host = entry.data.get(CONF_HOST, DEFAULT_HOST)
-    
-    bridge = WhatsAppBridge(hass, host)
+
+    bridge = WhatsAppBridge(hass, host, token)
     hass.data[DOMAIN][entry.entry_id] = bridge
 
     async def bridge_event_callback(msg):

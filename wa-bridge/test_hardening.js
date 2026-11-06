@@ -62,9 +62,10 @@ async function testPollPersistence() {
 function testNotReadyReplies() {
     return new Promise((resolve, reject) => {
         const childData = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-harden-live-'));
+        const childToken = 'hardening-secret';
         const child = spawn(process.execPath, ['index.js'], {
             cwd: __dirname,
-            env: { ...process.env, WA_DATA_PATH: childData },
+            env: { ...process.env, WA_DATA_PATH: childData, API_TOKEN: childToken },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         const timer = setTimeout(() => {
@@ -79,7 +80,9 @@ function testNotReadyReplies() {
             if (started || !output.includes('WebSocket server started')) return;
             started = true;
             const WebSocket = require('ws');
-            const ws = new WebSocket('ws://127.0.0.1:3000');
+            const ws = new WebSocket('ws://127.0.0.1:3000', {
+                headers: { Authorization: `Bearer ${childToken}` },
+            });
             const replies = [];
             ws.on('message', (raw) => {
                 const payload = JSON.parse(raw);
@@ -102,6 +105,11 @@ function testNotReadyReplies() {
                 } catch (err) {
                     reject(err);
                 }
+            });
+            ws.on('error', (err) => {
+                clearTimeout(timer);
+                child.kill('SIGTERM');
+                reject(err);
             });
             ws.on('open', () => {
                 ws.send(JSON.stringify({ type: 'get_groups' }));

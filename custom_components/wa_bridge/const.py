@@ -3,6 +3,7 @@
 DOMAIN = "wa_bridge"
 CONF_HOST = "host"
 CONF_PORT = "port"
+CONF_TOKEN = "token"
 
 DEFAULT_HOST = "ws://localhost:3000"
 

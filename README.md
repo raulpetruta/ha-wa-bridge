@@ -21,6 +21,21 @@ A custom integration to send and receive WhatsApp messages in Home Assistant nat
 - **Send Events**: Send WhatsApp calendar events with name, location, and time using the `wa_bridge.send_event` service.
 - **Receive Filtering**: Disable incoming messages entirely or restrict to specific groups to save resources.
 - **Easy Auth**: Scan a QR code in Home Assistant to link your account.
+- **Secure by default**: The bridge requires an API token before it accepts commands, and received media is documented to live outside Home Assistant's public `/local/` folder.
+
+## Security
+
+The bridge can send WhatsApp messages as your linked account, read incoming messages, and change groups, so it must never be reachable without authentication.
+
+- **The API token is required.** The bridge refuses to start until a shared secret is configured. Set it as the add-on option `api_token` (or the `API_TOKEN` environment variable for Docker), then enter the same value in the integration's **API token** field. Generate a strong value with:
+
+  ```bash
+  openssl rand -hex 32
+  ```
+
+- The integration authenticates with the WebSocket `Authorization: Bearer <token>` header. The bridge rejects unauthenticated connections with HTTP 401. The `?token=` query parameter exists as a fallback for manual testing only.
+- Never log or share the token. Do not expose port `3000` to the internet: keep the bridge on your local network (or reach it through a VPN) and restrict the port with your firewall or container network if possible.
+- **Received media must not live under `/config/www`.** Everything below `/config/www` is served **unauthenticated** at `/local/`. Point `media_download_path` at a location Home Assistant does not serve, such as `/media/whatsapp`.
 
 ## Usage
 
@@ -157,7 +172,7 @@ data:
 service: wa_bridge.set_group_picture
 data:
   group_id: "120363012345678901" # Group ID (use get_groups to find this)
-  media_path: "www/group-photo.jpg"
+  media_path: "/config/group-photo.jpg"
 ```
 
 ## Sending Broadcast Messages
@@ -247,13 +262,13 @@ data:
 ```
 
 #### Using a Local File
-Ensure the path is accessible by Home Assistant (e.g., in `config/www`).
+Ensure the path is accessible by Home Assistant, for example under `/config` or `/media`. Avoid `/config/www` for private files, because everything there is served unauthenticated at `/local/`.
 ```yaml
 service: wa_bridge.send_broadcast
 data:
   targets: ["Family Group", "40741234567"]
   message: "Security Snapshot"
-  media_path: "/config/www/camera_snapshot.jpg"
+  media_path: "/config/camera_snapshot.jpg"
 ```
 
 ### Automation Trigger
@@ -336,7 +351,8 @@ action:
 2.  Click the **dots (top-right) > Repositories**.
 3.  Add this repository URL: `https://github.com/raulpetruta/ha-wa-bridge`
 4.  Reload the store and install **WhatsApp Bridge**.
-5.  Start the Add-on. Accounts linked before v2.4.0 need to scan the QR code again. The bridge no longer keeps a browser session. Logging out of the linked device clears the saved session and waits for you to restart the add-on before it shows a new QR code.
+5.  Open the **Configuration** tab, generate an API token with `openssl rand -hex 32`, paste it into **API token** and save. The add-on will not start without it, and the same token is needed when you add the integration.
+6.  Start the Add-on. Accounts linked before v2.4.0 need to scan the QR code again. The bridge no longer keeps a browser session. Logging out of the linked device clears the saved session and waits for you to restart the add-on before it shows a new QR code.
 
 #### Option B: Docker (For Container/Core users)
 This project requires a small bridge service. Create a `docker-compose.yaml` file with the following content:
@@ -348,10 +364,16 @@ services:
     container_name: ha-wa-bridge
     restart: unless-stopped
     ports:
+      # Keep this port off the internet: every connection must present API_TOKEN.
       - "3000:3000"
     volumes:
       - ${CONFIG_DIR}/ha-wa-bridge/.wa_auth:/usr/src/app/.wwebjs_auth
+      # Received media is stored outside /config/www, which HA serves unauthenticated
+      - ${MEDIA_DIR}/whatsapp:/media/whatsapp
     environment:
+      # REQUIRED: shared secret the integration must send. Generate: openssl rand -hex 32
+      - API_TOKEN=replace-with-a-long-random-token
+
       # Forward messages you send yourself (groups only)
       - DETECT_OWN_MESSAGES=false
 
@@ -368,6 +390,9 @@ services:
       # - NONE    → disable logging for incoming messages
       - INCOMING_MESSAGE_LOG_LEVEL=FULL
 
+      # Save received photos and files outside /config/www
+      - MEDIA_DOWNLOAD_PATH=/media/whatsapp
+
       # Comma-separated group names — only these groups are forwarded (optional)
       # - ALLOWED_GROUPS=Family Group,Work Team
 
@@ -375,6 +400,8 @@ services:
       # Required for numbers_only mode
       # - ALLOWED_NUMBERS=40741234567,49123456789
 ```
+
+Before starting the container, replace `replace-with-a-long-random-token` with a real secret (`openssl rand -hex 32`) and keep it for the integration setup. `${CONFIG_DIR}` is your Home Assistant config folder and `${MEDIA_DIR}` is a folder for received media.
 
 Then run:
 ```bash
@@ -400,16 +427,30 @@ Version 3.0.0 renames the integration domain from `whatsapp` to `wa_bridge`, bec
 
 1. Remove the old **WhatsApp Integration** entry under **Settings → Devices & services**.
 2. Delete `custom_components/whatsapp` from your Home Assistant config folder (HACS does not remove it for you), then install this version and restart.
-3. Add **WhatsApp Bridge** again with the same bridge WebSocket URL. The bridge add-on or container needs no changes and stays linked to your WhatsApp account.
+3. Add **WhatsApp Bridge** again with the same bridge WebSocket URL and the API token configured in the bridge. The bridge add-on or container stays linked to your WhatsApp account.
 4. Update your automations and scripts:
    - Services: `whatsapp.send_message` (and the other `whatsapp.*` services) become `wa_bridge.*`.
    - Triggers: `platform: whatsapp` becomes `platform: wa_bridge`, and device triggers need to be picked again.
    - Unchanged: `notify.whatsapp`, the `whatsapp_*_received` events, and the bridge configuration.
 
+The API token introduced in 3.1.0 is required as well — see **Upgrading from 3.0.x** below for the bridge-side steps.
+
+### Upgrading from 3.0.x
+
+Version 3.1.0 makes the bridge API token mandatory and changes the recommended location for received media.
+
+1. Generate a token: `openssl rand -hex 32`.
+2. Add the token to the bridge: Add-on users open the **Configuration** tab and set **API token**, then save and restart the add-on. Docker users add `API_TOKEN=<token>` to the container environment and restart it.
+3. Update the integration: Home Assistant shows a **Reauthenticate** prompt for the existing entry. Enter the same token (the bridge URL is pre-filled) and submit. If no prompt appears, remove and re-add the integration; saved notify targets are kept in the config entry options.
+4. If `media_download_path` points under `/config/www`, move it to `/media/whatsapp` (mount that folder for Docker) and restart the bridge. Files already saved stay where they are.
+5. If the bridge logs that it is refusing to start without an API token, the option is still empty — set it before starting the container.
+
 ## Configuration
 
 ### Add-on Configuration
 If you are using the Home Assistant Add-on, you can configure the following options in the add-on configuration tab:
+
+- **`api_token`**: **Required.** Shared secret that every WebSocket client must send before it can control the bridge. Generate a long random value with `openssl rand -hex 32`, paste it here, and enter the same value in the integration's **API token** field. The bridge refuses to start while this is empty. Keep the token private.
 
 - **`detect_own_messages`**: Set to `true` to forward messages sent by your own account (e.g., from WhatsApp Web or your phone). Works for group messages only. Default: `false`.
 
@@ -440,11 +481,11 @@ If you are using the Home Assistant Add-on, you can configure the following opti
   ```
   Leave empty (default) to apply no number filter.
 
-- **`media_download_path`**: Optional directory for received photos, videos, and files. Leave empty to skip downloads. The add-on can write anywhere under `/config`. Example:
+- **`media_download_path`**: Optional directory for received photos, videos, and files. Leave empty to skip downloads. The add-on has read-write access to `/config` and `/media`; use `/media/whatsapp`, which Home Assistant does not serve over HTTP. Example:
   ```yaml
-  media_download_path: /config/www/whatsapp-media
+  media_download_path: /media/whatsapp
   ```
-  Files that pass the incoming-message filters are saved there. The message event includes `mediaPath`, `mediaFilename`, and `mediaMimetype`. Use `allowed_groups` if you only want one group's photos.
+  Do **not** point this at `/config/www` (or anything below it): everything under `/config/www` is served **unauthenticated** at `/local/`, so received private photos and files would be readable by anyone who can reach your instance. Files that pass the incoming-message filters are saved there. The message event includes `mediaPath`, `mediaFilename`, and `mediaMimetype`. Use `allowed_groups` if you only want one group's photos.
 
   ```yaml
   trigger:
@@ -460,6 +501,8 @@ If you are using the Home Assistant Add-on, you can configure the following opti
 All options are also available as environment variables:
 ```yaml
     environment:
+      # REQUIRED: shared secret the integration must send (openssl rand -hex 32)
+      - API_TOKEN=replace-with-a-long-random-token
       - DETECT_OWN_MESSAGES=true
       # Options: all | disabled | groups_only | numbers_only
       - INCOMING_MESSAGES_MODE=disabled
@@ -469,18 +512,18 @@ All options are also available as environment variables:
       - ALLOWED_GROUPS=Family Group,Work Team
       # Comma-separated phone numbers without '+' (optional)
       - ALLOWED_NUMBERS=40741234567,49123456789
-      # Directory for received media. Mount this path into the container.
-      # - MEDIA_DOWNLOAD_PATH=/media/whatsapp
+      # Directory for received media. Mount this path into the container and
+      # keep it outside /config/www, which Home Assistant serves unauthenticated.
+      - MEDIA_DOWNLOAD_PATH=/media/whatsapp
 ```
 
 ### Integration Setup
 
 1.  Go to **Settings > Devices & Services**.
 2.  Click **Add Integration** and search for **WhatsApp**.
-4.  **Click Submit**. The integration will be added immediately.
-    1. **if asked** for a host, see the WhatsApp Bridge Add-on for **hostname**(info-tab) and **port**(configuration-tab), eg. "ws://cf9fc682-ha-wa-bridge:3000"
-5.  Check your **Home Assistant Notifications** (bell icon) for the QR code.
-6.  **Scan the QR Code** with your WhatsApp mobile app (Linked Devices).
+3.  Enter the bridge **WebSocket URL** and the **API token** configured on the bridge, then submit. For the add-on, the hostname is shown on its **Info** tab and the port on its **Configuration** tab, for example `ws://cf9fc682-ha-wa-bridge:3000`. For Docker, use the bridge's host and port, for example `ws://homeassistant.local:3000`.
+4.  The integration is added immediately. Check your **Home Assistant Notifications** (bell icon) for the QR code.
+5.  **Scan the QR Code** with your WhatsApp mobile app (Linked Devices).
 
 ## Credits 
 Powered by [Baileys](https://github.com/WhiskeySockets/Baileys).
