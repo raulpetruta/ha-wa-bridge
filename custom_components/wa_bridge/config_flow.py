@@ -1,4 +1,6 @@
 import uuid
+from collections.abc import Mapping
+from typing import Any
 
 import voluptuous as vol
 import logging
@@ -8,6 +10,7 @@ import aiohttp
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -18,6 +21,7 @@ from .const import (
     CONF_TARGET_ID,
     CONF_TARGET_NAME,
     CONF_TARGETS,
+    CONF_TOKEN,
     DEFAULT_HOST,
     DOMAIN,
 )
@@ -25,10 +29,54 @@ from .notify_targets import normalize_phone_number, normalize_text, notify_targe
 
 _LOGGER = logging.getLogger(__name__)
 
+AUTH_FAILED_STATUSES = (401, 403)
+
+
+async def _async_verify_connection(
+    hass: HomeAssistant, host: str, token: str
+) -> str | None:
+    """Verify the bridge accepts the shared secret during the handshake.
+
+    Returns a config flow error key, or None when the connection succeeded.
+    The token is only ever sent in the Authorization header, never logged.
+    """
+    try:
+        session = async_get_clientsession(hass)
+        async with asyncio.timeout(10):
+            async with session.ws_connect(
+                host, headers={"Authorization": f"Bearer {token}"}
+            ) as ws:
+                # The bridge always announces itself (status or QR) on connect.
+                msg = await ws.receive_json()
+                _LOGGER.debug("Connection verification received: %s", msg)
+    except aiohttp.WSServerHandshakeError as err:
+        if err.status in AUTH_FAILED_STATUSES:
+            _LOGGER.warning("WhatsApp Bridge rejected the API token")
+            return "invalid_auth"
+        _LOGGER.warning("Could not connect to WhatsApp Bridge at %s: %s", host, err)
+        return "cannot_connect"
+    except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+        _LOGGER.warning("Could not connect to WhatsApp Bridge at %s: %s", host, err)
+        return "cannot_connect"
+    return None
+
+
+def _connection_schema(host: str) -> vol.Schema:
+    """Build the host + token form shared by user and reauth steps."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=host): str,
+            vol.Required(CONF_TOKEN): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+        }
+    )
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for WhatsApp Integration."""
 
-    VERSION = 1
+    VERSION = 2
 
     @staticmethod
     @callback
@@ -40,6 +88,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self):
         self._host = DEFAULT_HOST
+        self._token = ""
         self._qr_code = None
         self._status = None
 
@@ -48,32 +97,59 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
         if user_input is not None:
             self._host = user_input[CONF_HOST]
+            self._token = user_input[CONF_TOKEN]
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
 
-            # Verify connection
-            try:
-                session = async_get_clientsession(self.hass)
-                async with asyncio.timeout(10):
-                    async with session.ws_connect(self._host) as ws:
-                        # Wait for the first message to confirm it's our bridge
-                        msg = await ws.receive_json()
-                        # If we get a valid JSON, we assume it's the bridge
-                        _LOGGER.debug("Connection verification received: %s", msg)
-            except (aiohttp.ClientError, TimeoutError, ValueError) as e:
-                _LOGGER.warning("Could not connect to WhatsApp Bridge at %s: %s", self._host, e)
-                errors["base"] = "cannot_connect"
-            
-            if not errors:
-                return self.async_create_entry(title="WhatsApp", data={CONF_HOST: self._host})
+            # Verify the bridge accepts the API token before creating the entry.
+            error = await _async_verify_connection(self.hass, self._host, self._token)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title="WhatsApp",
+                    data={CONF_HOST: self._host, CONF_TOKEN: self._token},
+                )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
-            }),
+            data_schema=_connection_schema(self._host),
             errors=errors,
-            description_placeholders={"default_host": DEFAULT_HOST}
+        )
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+        """Start re-authentication when the bridge rejects the saved token."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None) -> FlowResult:
+        """Ask for a fresh API token after the bridge rejected the old one."""
+        errors = {}
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        if entry is None:
+            return self.async_abort(reason="reauth_failed")
+
+        if user_input is not None:
+            host = user_input[CONF_HOST]
+            token = user_input[CONF_TOKEN]
+            error = await _async_verify_connection(self.hass, host, token)
+            if error:
+                errors["base"] = error
+            else:
+                # Replace host and token, keeping any other entry data intact.
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={**entry.data, CONF_HOST: host, CONF_TOKEN: token},
+                    reason="reauth_successful",
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=_connection_schema(
+                user_input[CONF_HOST]
+                if user_input is not None
+                else entry.data.get(CONF_HOST, DEFAULT_HOST)
+            ),
+            errors=errors,
         )
 
 

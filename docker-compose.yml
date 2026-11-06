@@ -2,18 +2,21 @@ services:
   wa-bridge:
     # Build locally for testing, or pull from GHCR
     build: ./wa-bridge
-    image: ghcr.io/raulpetruta/ha-whatsapp-bridge:latest
+    image: ghcr.io/raulpetruta/ha-wa-bridge:latest
     container_name: ha-whatsapp-bridge
     restart: unless-stopped
     ports:
+      # Keep this port off the internet. Every connection must present API_TOKEN.
       - "3000:3000"
     volumes:
       - ./wa-bridge/.wwebjs_auth:/usr/src/app/.wwebjs_auth
-      # - ./wa-media:/media/whatsapp # Mount the folder used by MEDIA_DOWNLOAD_PATH
+      - ./wa-media:/media/whatsapp # Received media (never served by Home Assistant)
     environment:
+      # REQUIRED: shared secret the integration must send. Generate with: openssl rand -hex 32
+      - API_TOKEN=replace-with-a-long-random-token
       - DETECT_OWN_MESSAGES=true # Set to true to allow the bridge to detect and broadcast messages sent by your own authenticated WhatsApp account
       - INCOMING_MESSAGES_MODE=all # Set to 'all' to allow all messages, or 'numbers_only' to allow only messages from specific numbers, or 'groups_only' to allow only messages from specific groups
       - INCOMING_MESSAGE_LOG_LEVEL=FULL # FULL = log entire payload (default), COMPACT = sender & type only, NONE = no incoming message logs
       # - ALLOWED_NUMBERS=40741234567 # Set to allow only messages from specific numbers
       # - ALLOWED_GROUPS=Family Group,Work Team # Set to allow only messages from specific groups
-      # - MEDIA_DOWNLOAD_PATH=/media/whatsapp # Save received photos and files into the mounted folder
+      - MEDIA_DOWNLOAD_PATH=/media/whatsapp # Save received photos and files into the mounted folder

@@ -1,4 +1,12 @@
 configuration:
+  api_token:
+    name: API Token
+    description: >-
+      Required. Shared secret that every WebSocket client must send before it can
+      control the bridge. Generate a long random value (for example with
+      "openssl rand -hex 32") and enter the same value in the integration's API
+      token field. The bridge refuses to start while this is empty. Never expose
+      the bridge port to the internet.
   detect_own_messages:
     name: Detect Own Messages (works in groups only)
     description: >-
@@ -33,6 +41,10 @@ configuration:
     name: Media Download Path
     description: >-
       Optional directory where received photos, videos, and files are saved.
-      Leave empty to skip downloads. The add-on can write under /config, for
-      example /config/www/whatsapp-media. The saved path is included on the
-      message event as mediaPath. The same incoming-message filters apply.
+      Leave empty to skip downloads. Use a location that Home Assistant does not
+      serve, for example /media/whatsapp. The add-on has read-write access to
+      /media. Do NOT point this at /config/www (or anything below it): everything
+      under /config/www is served unauthenticated at /local/, so received private
+      media would be readable by anyone who can reach your instance. The saved
+      path is included on the message event as mediaPath. The same
+      incoming-message filters apply.

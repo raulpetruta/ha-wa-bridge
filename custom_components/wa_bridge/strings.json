@@ -3,21 +3,41 @@
     "step": {
       "user": {
         "title": "Connect to WhatsApp Bridge",
-        "description": "Enter the WebSocket URL of the WhatsApp Bridge.",
+        "description": "Enter the WebSocket URL of the WhatsApp Bridge and the API token it was started with.",
         "data": {
-          "host": "Bridge WebSocket URL"
+          "host": "Bridge WebSocket URL",
+          "token": "API token"
+        },
+        "data_description": {
+          "host": "WebSocket URL of the Node.js bridge, for example ws://localhost:3000.",
+          "token": "Shared secret configured for the bridge (api_token add-on option or API_TOKEN environment variable)."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with WhatsApp Bridge",
+        "description": "The bridge rejected the saved API token. Enter the current token to reconnect.",
+        "data": {
+          "host": "Bridge WebSocket URL",
+          "token": "API token"
+        },
+        "data_description": {
+          "host": "WebSocket URL of the Node.js bridge, for example ws://localhost:3000.",
+          "token": "Shared secret configured for the bridge (api_token add-on option or API_TOKEN environment variable)."
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the bridge. Make sure the Node.js service is running.",
+      "invalid_auth": "The bridge rejected the API token. Check the token configured for the bridge.",
       "not_ready": "WhatsApp is not ready yet. Please ensure you have scanned the QR code.",
       "initializing": "WhatsApp client is initializing. Please try again in a few seconds.",
       "no_qr_received": "No QR code received. If you are already logged in, check the logs.",
       "unknown": "Unexpected error occurred. Please check the Home Assistant logs."
     },
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "Device is already configured",
+      "reauth_successful": "Re-authentication was successful",
+      "reauth_failed": "Re-authentication failed because the configuration entry could not be found."
     }
   },
   "options": {

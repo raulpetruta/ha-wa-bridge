@@ -1,6 +1,13 @@
 const WebSocket = require('ws');
 
-const ws = new WebSocket('ws://localhost:3000');
+// Authenticate with the bridge API token (add-on option api_token / Docker env API_TOKEN).
+const token = process.env.API_TOKEN;
+if (!token) {
+    console.error('Set API_TOKEN to the bridge API token before running this script.');
+    process.exit(1);
+}
+
+const ws = new WebSocket('ws://localhost:3000', { headers: { Authorization: `Bearer ${token}` } });
 
 ws.on('open', function open() {
   console.log('Connected to WA Bridge');
