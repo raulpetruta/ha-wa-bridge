@@ -13,8 +13,10 @@
   "type": "commonjs",
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",
+    "link-preview-js": "^3.2.0",
     "pino": "^9.6.0",
     "qrcode": "^1.5.4",
+    "sharp": "^0.35.5",
     "ws": "^8.19.0"
   }
 }
